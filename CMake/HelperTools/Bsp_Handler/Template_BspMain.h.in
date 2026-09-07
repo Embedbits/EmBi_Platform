@@ -1,0 +1,32 @@
+/**
+ * \author @AUTHOR@
+ * \file BspMain.h
+ * \ingroup BspMain
+ * \brief Board Support Packges (BSP) Main entry point functionality
+ */
+
+#ifndef BSPMAIN_H
+#define BSPMAIN_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ============================= INCLUDES ================================== */
+
+/* ============================= TYPEDEFS ================================== */
+
+/* ========================= SYMBOLIC CONSTANTS ============================ */
+
+/* ========================= EXPORTED MACROS =============================== */
+
+/* ========================= EXPORTED VARIABLES ============================ */
+
+/* ======================== EXPORTED FUNCTIONS ============================= */
+void                        BspMain                     (void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* BSPMAIN_H */

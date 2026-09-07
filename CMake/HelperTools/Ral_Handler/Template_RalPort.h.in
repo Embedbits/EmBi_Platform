@@ -1,0 +1,34 @@
+/**
+ * \author @TEMPLATE_FILE_AUTHOR@
+ * \file Stm32_@TEMPLATE_FILE_MODULE_NAME@.h
+ * \ingroup Port
+ * \brief Port file for using Register Abstraction Layer (RAL) @TEMPLATE_FILE_MODULE_NAME_UPPER@ peripheral.
+ *
+ */
+
+#ifndef PORT_STM32_@TEMPLATE_FILE_MODULE_NAME_UPPER@_H
+#define PORT_STM32_@TEMPLATE_FILE_MODULE_NAME_UPPER@_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ============================= INCLUDES =================================== */
+#include "@HEADER_NAME@.h"              /* @MODULE_NAME_UPPER@ peripheral access layer   */
+/* ============================= TYPEDEFS =================================== */
+
+/* ========================= SYMBOLIC CONSTANTS ============================= */
+
+/* ========================= EXPORTED MACROS ================================ */
+
+/* ========================= EXPORTED VARIABLES ============================= */
+
+/* ======================== EXPORTED FUNCTIONS ============================== */
+
+@TEMPLATE_FILE_EXPORTED_FUNCTIONS_LIST@
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PORT_STM32_@TEMPLATE_FILE_MODULE_NAME_UPPER@_H */

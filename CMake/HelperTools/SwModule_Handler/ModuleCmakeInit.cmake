@@ -1,0 +1,96 @@
+################################################################################
+#
+# Initialization of CMakeLists.txt file in desired module. 
+#
+# User must specify 'MODULE_PATH_ARG' and 'MODULE_NAME_ARG' to initialize module.
+# 
+################################################################################
+cmake_minimum_required(VERSION 3.21)
+
+#==============================================================================#
+# Global variables
+#==============================================================================#
+
+# Set path to the CMakeLists.txt handler module
+get_filename_component(CMAKELISTS_HANDLER_PATH "${CMAKE_CURRENT_LIST_DIR}/../CMakeLists_Handler/CMakeLists_Handler.cmake" REALPATH)
+
+# Include CMakeLists.txt handler module
+include("${CMAKELISTS_HANDLER_PATH}")
+
+# Set path to system configuration file
+get_filename_component(SYSTEM_CONFIG_FILE_PATH "${CMAKE_CURRENT_LIST_DIR}/../../SysConfig.cmake" REALPATH)
+
+# Include file with system configuration values
+include("${SYSTEM_CONFIG_FILE_PATH}")
+
+# Read BSP repository URL
+SysConfig_Get_BspRepoURL(BSP_BSP_REPO_URL)
+
+# Read project root folder path
+SysConfig_Get_ProjectRootPath(PROJECT_ROOT_PATH)
+
+#------------------------------------------------------------------------------#
+# Generation of CMakeLists.txt in target module.
+#
+# MODULE_PATH_ARG            [in]: Path to the required module location (without module name in it)
+# MODULE_NAME_ARG            [in]: Name of module in location (folder name).
+#------------------------------------------------------------------------------#
+function(ModuleCmakeInit MODULE_PATH_ARG MODULE_NAME_ARG)
+    message(STATUS "Initializing module CMake file...")
+    
+    string(SUBSTRING "${MODULE_NAME_ARG}" 0 1 first_char)  
+    string(TOLOWER "${first_char}" first_char_lower)
+    
+    string(SUBSTRING "${MODULE_NAME_ARG}" 1 -1 rest)
+    # Set typedef name for files generation
+    set(TYPE_NAME "${first_char_lower}${rest}")
+    
+    # Set name for macros in files generation
+    set(MACRO_NAME "${MODULE_NAME_ARG}")
+    string(TOUPPER "${MACRO_NAME}" MACRO_NAME)
+    
+    set(MODULE_NAME "${MODULE_NAME_ARG}")
+    
+    # Read author name from git global configuration
+    execute_process(COMMAND git config --global user.name
+                    OUTPUT_VARIABLE AUTHOR
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+    
+    if(EXISTS "${PROJECT_ROOT_PATH}/${MODULE_PATH_ARG}/${MODULE_NAME_ARG}/CMakeLists.txt")
+        message(STATUS "CMakeLists.txt file already exist in the source directory.")
+    else()
+
+        CMakeLists_Handler_Set_PrivateInlcudeDirs("\${CMAKE_CURRENT_SOURCE_DIR}")
+        
+        CMakeLists_Handler_Set_PublicInlcudeDirs("")
+        
+        CMakeLists_Handler_Set_SourceFiles("${MODULE_NAME_ARG}.c")
+        
+        CMakeLists_Handler_Set_PublicHeaderFiles("${MODULE_NAME_ARG}_Types.h;${MODULE_NAME_ARG}_Port.h")
+        
+        CMakeLists_Handler_Set_ModuleName("${MODULE_NAME_ARG}")
+        
+        CMakeLists_Handler_Generate_CMakeLists("${PROJECT_ROOT_PATH}/${MODULE_PATH_ARG}/${MODULE_NAME_ARG}/")
+
+    endif()
+endfunction(ModuleCmakeInit)
+
+#==============================================================================#
+# Main functionality
+#==============================================================================#
+# Check if run directly with cmake -P
+if(CMAKE_SCRIPT_MODE_FILE AND 
+   CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE AND 
+   DEFINED CMAKE_INIT_MODULE_PATH AND
+   DEFINED CMAKE_INIT_MODULE_NAME)
+   
+    if(NOT DEFINED CMAKE_INIT_MODULE_DEP_LIBS)
+        set(CMAKE_INIT_MODULE_DEP_LIBS "")
+    endif()
+    
+    message(STATUS "1:${CMAKE_INIT_MODULE_PATH}2:${CMAKE_INIT_MODULE_NAME}3:${CMAKE_INIT_MODULE_DEP_LIBS}")
+   
+    ModuleCmakeInit(${CMAKE_INIT_MODULE_PATH}
+                    ${CMAKE_INIT_MODULE_NAME})
+    
+endif()

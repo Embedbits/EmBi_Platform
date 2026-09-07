@@ -1,0 +1,48 @@
+/**
+ * \author @AUTHOR@
+ * \file BspMain.c
+ * \ingroup BspMain
+ * \brief Board Support Packages (BSP) Main entry functionality.
+ *
+ * To prevent calling application main function directly from Startup file,
+ * the entry point is Main in Board Support Packages (BSP). The user can 
+ * initialize necessary peripherals (RCC, Flash ... ) and after this, enter the 
+ * application functionality.
+ */
+/* ============================= INCLUDES =================================== */
+#include "BspMain.h"                    /* Self include                       */
+#include "AppMain.h"                    /* Application layer main entry point */
+/* ============================= TYPEDEFS =================================== */
+
+/* ======================= FORWARD DECLARATIONS ============================= */
+
+/* ========================= SYMBOLIC CONSTANTS ============================= */
+
+/* ============================== MACROS ==================================== */
+
+/* ========================= EXPORTED VARIABLES ============================= */
+
+/* ========================== LOCAL VARIABLES =============================== */
+
+/* ======================== EXPORTED FUNCTIONS ============================== */
+
+/* Needed prototypes because ST suck again and releases defect SW */
+__attribute__((weak)) void _close(void){}
+__attribute__((weak)) void _lseek(void){}
+__attribute__((weak)) void _read(void){}
+__attribute__((weak)) void _write(void){}
+
+/** 
+ * \brief Application entry point. 
+ */
+void BspMain(void)
+{
+    /* User initializations */
+    
+    /* Application entry point */
+    AppMain();
+}
+
+/* ========================== LOCAL FUNCTIONS =============================== */
+
+/* =============================== TASKS ==================================== */

@@ -1,0 +1,35 @@
+/**
+ * \author @AUTHOR@
+ * \file @FILE_NAME@.h
+ * \ingroup @MODULE_NAME@
+ * \brief @FILE_NAME@ module common functionality header file.
+ *
+ * This file contains the common functionality used internally by the module,
+ * and shall provide interface between the module and the application.
+ *
+ */
+
+#ifndef @MACRO_MODULE_NAME@_@MACRO_COMPONENT_NAME@_H
+#define @MACRO_MODULE_NAME@_@MACRO_COMPONENT_NAME@_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ============================= INCLUDES =================================== */
+#include "@MODULE_NAME@_Types.h"            /* Module types definitions       */
+/* ============================= TYPEDEFS =================================== */
+
+/* ========================= SYMBOLIC CONSTANTS ============================= */
+
+/* ========================= EXPORTED MACROS ================================ */
+
+/* ========================= EXPORTED VARIABLES ============================= */
+
+/* ======================== EXPORTED FUNCTIONS ============================== */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* @MACRO_MODULE_NAME@_@MACRO_COMPONENT_NAME@_H */

@@ -1,0 +1,4 @@
+**/Build_Debug
+**/.settings
+/CMake/**/Cache/
+**/Docs

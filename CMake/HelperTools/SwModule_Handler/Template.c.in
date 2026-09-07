@@ -1,0 +1,96 @@
+/**
+ * \author @AUTHOR@
+ * \file @FILE_NAME@.h
+ * \ingroup @MODULE_NAME@
+ * \brief @COMPONENT_NAME@ module common functionality
+ *
+ */
+/* ============================== INCLUDES ================================== */
+#include "@FILE_NAME@.h"                    /* Self include                   */
+#include "@MODULE_NAME@_Port.h"             /* Own port file include          */
+#include "@MODULE_NAME@_Types.h"            /* Module types definitions       */
+/* ============================== TYPEDEFS ================================== */
+
+/* ======================== FORWARD DECLARATIONS ============================ */
+
+/* ========================== SYMBOLIC CONSTANTS ============================ */
+
+/** Value of major version of SW module */
+#define @MACRO_NAME@_MAJOR_VERSION           ( 1u )
+
+/** Value of minor version of SW module */
+#define @MACRO_NAME@_MINOR_VERSION           ( 0u )
+
+/** Value of patch version of SW module */
+#define @MACRO_NAME@_PATCH_VERSION           ( 0u )
+
+/* =============================== MACROS =================================== */
+
+/* ========================== EXPORTED VARIABLES ============================ */
+
+/* =========================== LOCAL VARIABLES ============================== */
+
+/* ========================= EXPORTED FUNCTIONS ============================= */
+
+/**
+ * \brief Returns module SW version
+ *
+ * \return Module SW version
+ */
+@TYPE_NAME@_ModuleVersion_t @FUNCTION_PREFIX@_Get_ModuleVersion( void )
+{
+    @TYPE_NAME@_ModuleVersion_t retVersion;
+
+    retVersion.Major = @MACRO_NAME@_MAJOR_VERSION;
+    retVersion.Minor = @MACRO_NAME@_MINOR_VERSION;
+    retVersion.Patch = @MACRO_NAME@_PATCH_VERSION;
+
+    return (retVersion);
+}
+
+
+/**
+ * \brief Initializes module @COMPONENT_NAME@
+ *
+ * This function shall call every necessary sub-module initialization function 
+ * and set up all the necessary resources for the module to work. In case of
+ * failure, the function shall handle it by itself and shall not be transferred
+ * to AppMain layer.
+ */
+void @FUNCTION_PREFIX@_Init( void )
+{
+
+}
+
+
+/**
+ * \brief Deinitializes module @COMPONENT_NAME@
+ *
+ * This function shall call every necessary sub-module deinitialization function 
+ * and free all the resources allocated by the module. In case of failure, the 
+ * function shall handle it by itself and shall not be transferred to AppMain 
+ * layer.
+ */
+void @FUNCTION_PREFIX@_Deinit( void )
+{
+
+}
+
+
+/**
+ * \brief Main task of module @MODULE_NAME@
+ *
+ * This function shall be called in the main loop of the application or the task
+ * scheduler. It shall be called periodically, depending on the module's 
+ * requirements.
+ */
+void @FUNCTION_PREFIX@_Task( void )
+{
+
+}
+
+/* =========================== LOCAL FUNCTIONS ============================== */
+
+/* =========================== INTERRUPT HANDLERS =========================== */
+
+/* ================================ TASKS =================================== */

@@ -1,0 +1,74 @@
+/**
+ * \author @AUTHOR@
+ * \file @MODULE_NAME@_Types.h
+ * \ingroup @MODULE_NAME@
+ * \brief @MODULE_NAME@ module global types definition
+ *
+ * This file contains the types definitions used across the module and are 
+ * available for other modules through Port file.
+ *
+ */
+
+#ifndef @MACRO_NAME@_@MACRO_NAME@_TYPES_H
+#define @MACRO_NAME@_@MACRO_NAME@_TYPES_H
+/* ============================== INCLUDES ================================== */
+#include "stdint.h"                         /* Module types definition        */
+/* ========================== SYMBOLIC CONSTANTS ============================ */
+
+/** Null pointer definition */
+#define @MACRO_NAME@_NULL_PTR                        ( ( void* ) 0u )
+
+/* ========================== EXPORTED MACROS =============================== */
+
+/* ============================== TYPEDEFS ================================== */
+
+/** \brief Type signaling major version of SW module */
+typedef uint8_t @TYPE_NAME@_MajorVersion_t;
+
+
+/** \brief Type signaling minor version of SW module */
+typedef uint8_t @TYPE_NAME@_MinorVersion_t;
+
+
+/** \brief Type signaling patch version of SW module */
+typedef uint8_t @TYPE_NAME@_PatchVersion_t;
+
+
+/** \brief Type signaling actual version of SW module */
+typedef struct
+{
+    @TYPE_NAME@_MajorVersion_t Major; /**< Major version */
+    @TYPE_NAME@_MinorVersion_t Minor; /**< Minor version */
+    @TYPE_NAME@_PatchVersion_t Patch; /**< Patch version */
+}   @TYPE_NAME@_ModuleVersion_t;
+
+
+/** Function status enumeration */
+typedef enum
+{
+    @MACRO_NAME@_FUNCTION_INACTIVE = 0u, /**< Function status is inactive */
+    @MACRO_NAME@_FUNCTION_ACTIVE         /**< Function status is active   */
+}   @TYPE_NAME@_FunctionState_t;
+
+
+/** Enumeration used to signal request processing state */
+typedef enum
+{
+    @MACRO_NAME@_REQUEST_ERROR = 0u, /**< Processing request failed  */
+    @MACRO_NAME@_REQUEST_OK          /**< Processing request succeed */
+}   @TYPE_NAME@_RequestState_t;
+
+
+/** Flag states enumeration */
+typedef enum
+{
+    @MACRO_NAME@_FLAG_INACTIVE = 0u, /**< Inactive flag state */
+    @MACRO_NAME@_FLAG_ACTIVE         /**< Active flag state   */
+}   @TYPE_NAME@_FlagState_t;
+
+/* ========================== EXPORTED VARIABLES ============================ */
+
+/* ========================= EXPORTED FUNCTIONS ============================= */
+
+
+#endif /* @MACRO_NAME@_@MACRO_NAME@_TYPES_H */

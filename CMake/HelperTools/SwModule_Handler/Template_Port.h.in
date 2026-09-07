@@ -1,0 +1,42 @@
+/**
+ * \author @AUTHOR@
+ * \file @MODULE_NAME@_Port.h
+ * \ingroup @MODULE_NAME@
+ * \brief @MODULE_NAME@ module public functionality
+ *
+ * This file contains all available public functionality, any other files shall 
+ * not used outside of the module.
+ *
+ */
+
+#ifndef @MACRO_NAME@_@MACRO_NAME@_PORT_H
+#define @MACRO_NAME@_@MACRO_NAME@_PORT_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ============================== INCLUDES ================================== */
+#include "@MODULE_NAME@_Types.h"                      /* Module types definition        */
+/* ============================== TYPEDEFS ================================== */
+
+/* ========================== SYMBOLIC CONSTANTS ============================ */
+
+/* ========================== EXPORTED MACROS =============================== */
+
+/* ========================== EXPORTED VARIABLES ============================ */
+
+/* ========================= EXPORTED FUNCTIONS ============================= */
+
+@TYPE_NAME@_ModuleVersion_t     @MODULE_NAME@_Get_ModuleVersion           ( void );
+
+void                        @MODULE_NAME@_Init                        ( void );
+void                        @MODULE_NAME@_Deinit                      ( void );
+void                        @MODULE_NAME@_Task                        ( void );
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* @MACRO_NAME@_@MACRO_NAME@_PORT_H */
+
