@@ -58,17 +58,17 @@ set(PROJECT_NAME                        "Project_Template_${CMAKE_BUILD_TYPE}")
 set(CMAKE_EXPORT_COMPILE_COMMANDS       ON)
 
 # Setup compiler settings
-set(CMAKE_C_STANDARD                    11)
+set(CMAKE_C_STANDARD                    17)
 set(CMAKE_C_STANDARD_REQUIRED           ON)
 set(CMAKE_C_EXTENSIONS                  ON)
 
 #=========================== DO NOT CHANGE THIS PART ==========================#
 #============================ Artifacts preparation ===========================#
 
-# Check, if artifact manager is used in project.
-if(EXISTS ${CMAKE_SOURCE_DIR}/EmB_Platform/CMake/ArtifactsManager/Artifacts.cmake)
+if(EXISTS ${CMAKE_SOURCE_DIR}/EmBi_Platform/CMake/ArtifactsHandler/ArtifactsHandler.cmake)
+    set(CONFIG_FILE_PATH "${CMAKE_SOURCE_DIR}")
     # Run artifacts configuration before build.
-    include(${CMAKE_SOURCE_DIR}/EmB_Platform/CMake/ArtifactsManager/Artifacts.cmake)
+    include(${CMAKE_SOURCE_DIR}/EmBi_Platform/CMake/ArtifactsHandler/ArtifactsHandler.cmake)
 endif()
 
 #========================== Build flags configuration =========================#
@@ -100,7 +100,7 @@ project(${PROJECT_NAME}
         LANGUAGES C CXX ASM)
 
 # Include main CMake script
-include("${CMAKE_SOURCE_DIR}/EmB_Platform/CMake/Build.cmake")
+include("${CMAKE_SOURCE_DIR}/EmBi_Platform/CMake/Build.cmake")
 
 #========================= User specific commands =============================#
 

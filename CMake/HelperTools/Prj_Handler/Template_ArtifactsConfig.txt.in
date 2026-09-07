@@ -1,3 +1,12 @@
+# Default configuration of artifacts list. The list of available 
+# artifacts can be found in artifacts root repository. Then the
+# user can name any of the artifacts (submodules) and specify version 
+# for Binary part (first number after artifact name) and Core part
+# version (second number after name). The versions and names are 
+# separated by ';'. 
+
 ninja;1.12.0;latest
 gcc-arm-none-eabi;latest;latest
 doxygen;latest;latest
+ARTIFACTS_HANDLER_CACHE_PATH=C:\ArtifactsCache
+ARTIFACTS_HANDLER_ROOT_REPO_URL=https://github.com/Embedbits/Artifacts.git

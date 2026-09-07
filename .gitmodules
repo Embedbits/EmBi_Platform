@@ -1,3 +1,0 @@
-[submodule "CMake/ArtifactsHandler"]
-	path = CMake/ArtifactsHandler
-	url = https://github.com/Embedbits/EmBi-ArtifactsHandler.git
