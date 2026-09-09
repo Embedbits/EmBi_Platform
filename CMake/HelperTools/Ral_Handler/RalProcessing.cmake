@@ -26,6 +26,9 @@ include("${SYSTEM_CONFIG_FILE_PATH}")
 # Global variables
 #==============================================================================#
 
+# Folder containing the RAL port template file (this script's own folder).
+set(TEMPLATE_FILE_PATH "${CMAKE_CURRENT_LIST_DIR}")
+
 # Name of template file to be used for RAL interface generation
 set(TEMPLATE_NAME "Template_RalPort.h.in")
 
@@ -33,7 +36,17 @@ set(TEMPLATE_NAME "Template_RalPort.h.in")
 SysConfig_Get_ProjectRootPath(PROJECT_ROOT_PATH)
 
 #------------------------------------------------------------------------------#
-# Processing all RAL header files and generation of its port headers.  
+# Function: RalProcessing_GenerateRalPorts
+# Description:
+#   Processes all RAL LL header files and generates their generic port
+#   headers (e.g. stm32u5xx_ll_usart.h -> Stm32_usart.h), so Mcal never has
+#   to include a family-specific RAL header directly.
+#
+# INPUT_DIR_ARG  [in]: Path to the folder containing RAL LL header files.
+#                       Empty/omitted falls back to Bsp/Ral/Stm32_Drv/Inc.
+# OUTPUT_DIR_ARG [in]: Path to the folder where generated port files shall
+#                       be written (a "Port" subfolder is created under it).
+#                       Empty/omitted falls back to Bsp/Ral/Port.
 #------------------------------------------------------------------------------#
 function(RalProcessing_GenerateRalPorts INPUT_DIR_ARG OUTPUT_DIR_ARG)
 
@@ -108,5 +121,5 @@ if(CMAKE_SCRIPT_MODE_FILE AND
    DEFINED OUTPUT_DIR_ARG)
    
     message(STATUS "Script RalProcessing.cmake executed in script mode.")
-    RalProcessing_GenerateRalPorts()
+    RalProcessing_GenerateRalPorts(${INPUT_DIR_ARG} ${OUTPUT_DIR_ARG})
 endif()

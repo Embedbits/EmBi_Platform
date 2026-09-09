@@ -1,15 +1,25 @@
 # ==============================================================================
 #
+# Generic GIT helper functions used by the module handler scripts (Bsp, Ral,
+# Mw, ...).
 #
+# Provides low level wrappers around GIT operations needed to manage
+# repositories and their submodules:
+#   - Reading a repository's declared submodules (name / URL / active state)
+#     directly from its .gitmodules file.
+#   - Resolving a submodule's pinned commit for a given branch of its parent
+#     repository.
+#   - Cloning a repository without submodules (used to seed local caches).
+#   - Adding a new GIT submodule at a given path.
+#   - Listing a repository's remote branches, and checking whether a specific
+#     branch exists on a remote (without requiring a local clone).
+#   - Switching a repository (or submodule) to a given branch/commit, doing a
+#     hard reset + clean, and recursively updating any nested submodules.
+#   - Configuring how a submodule's local modifications are reported by its
+#     parent repository (the "ignore" setting).
 #
-#
-#
-#
-#
-#
-#
-#
-#
+# All functions in this file operate purely on GIT (no Azure DevOps / GitHub
+# REST API calls) and are shared across the *_Handler.cmake scripts.
 #
 # ==============================================================================
 
@@ -172,7 +182,7 @@ function(GitHandler_CloneMin IN_REPO_URL IN_TARGET_PATH)
                     ERROR_QUIET)
                  
     if(NOT GIT_CLONE_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to clone repository: ${IN_REPO_URL} into ${IN_REPO_URL}.")
+        message(FATAL_ERROR "Failed to clone repository: ${IN_REPO_URL} into ${IN_TARGET_PATH}.")
     endif()
 
 endfunction()
@@ -246,6 +256,32 @@ function(GitHandler_GetRemoteBranchList IN_TARGET_PATH OUT_BRANCH_LIST)
     list(REMOVE_DUPLICATES BRANCH_LIST)
     
     set(${OUT_BRANCH_LIST} ${BRANCH_LIST} PARENT_SCOPE)
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: GitHandler_RemoteBranchExists
+# Description: Checks whether a branch exists on a remote repository, without
+#              requiring a local clone of that repository.
+#
+# IN_REPO_URL    [in]: GIT repository URL to query.
+# IN_BRANCH_NAME [in]: Branch name to look for.
+# OUT_EXISTS    [out]: TRUE if the branch exists on the remote, FALSE otherwise.
+# ------------------------------------------------------------------------------
+function(GitHandler_RemoteBranchExists IN_REPO_URL IN_BRANCH_NAME OUT_EXISTS)
+
+    execute_process(COMMAND git ls-remote --heads ${IN_REPO_URL} ${IN_BRANCH_NAME}
+                    OUTPUT_VARIABLE BRANCH_REF
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+
+    if("${BRANCH_REF}" STREQUAL "")
+        message(DEBUG "Branch '${IN_BRANCH_NAME}' not found on remote '${IN_REPO_URL}'")
+        set(${OUT_EXISTS} FALSE PARENT_SCOPE)
+    else()
+        set(${OUT_EXISTS} TRUE PARENT_SCOPE)
+    endif()
 
 endfunction()
 

@@ -194,6 +194,153 @@ function(Bsp_ModuleHandler_FolderStructInit)
 endfunction()
 
 
+# ------------------------------------------------------------------------------
+# Function: Bsp_ModuleHandler_McalCMakeListsGenerate
+# Description:
+#   (Re)generates the Bsp/Mcal/CMakeLists.txt file so it add_subdirectory()'s
+#   every peripheral submodule that was composed into Bsp/Mcal. Always
+#   overwrites the file from scratch, so it stays in sync with whichever
+#   peripheral repositories were actually added on the current run.
+#
+# IN_MODULE_NAMES [in]: List of peripheral module folder names (e.g. Rcc,
+#                        Nvic) that were added under Bsp/Mcal and need to be
+#                        built.
+# ------------------------------------------------------------------------------
+function(Bsp_ModuleHandler_McalCMakeListsGenerate IN_MODULE_NAMES)
+
+    file(MAKE_DIRECTORY "${PROJECT_ROOT_PATH}/${BSP_REL_PATH}/Mcal")
+
+    set(MCAL_CMAKE_PATH "${PROJECT_ROOT_PATH}/${BSP_REL_PATH}/Mcal/CMakeLists.txt")
+
+    if(IN_MODULE_NAMES)
+
+        set(CONTENT "")
+
+        foreach(MODULE_NAME ${IN_MODULE_NAMES})
+            string(APPEND CONTENT "add_subdirectory(\${CMAKE_CURRENT_LIST_DIR}/${MODULE_NAME})\n")
+        endforeach()
+
+    else()
+
+        set(CONTENT "# No Mcal peripheral submodules matched the selected branch.\n")
+
+    endif()
+
+    file(WRITE "${MCAL_CMAKE_PATH}" "${CONTENT}")
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Bsp_ModuleHandler_McalPeripheralsInit
+# Description:
+#   Composes the Bsp/Mcal folder out of Mcal's OWN peripheral repositories,
+#   instead of adding the Mcal repository itself as a single GIT submodule.
+#
+#   Mcal's repository is cloned into a scratch cache (never committed as a
+#   project submodule) and switched to the selected family branch. Its
+#   .gitmodules is then read to discover every peripheral repository it
+#   currently declares (e.g. Rcc, Nvic, Gpio, Exti, ...). Each peripheral
+#   repository that also has the selected family branch available is added
+#   as its own GIT submodule directly under Bsp/Mcal and checked out at the
+#   LATEST commit of that branch (not a pinned commit) - a peripheral
+#   repository missing the branch is soft-skipped with a warning, it does not
+#   abort the rest. Finally, Bsp/Mcal/CMakeLists.txt is regenerated to build
+#   every module that was added.
+#
+# IN_MCAL_REPO_URL [in]: URL of Mcal's own GIT repository (as declared in the
+#                         BSP repository's .gitmodules).
+# IN_BRANCH_NAME   [in]: Selected family branch name (e.g. "STM32G4"), used
+#                         both to select Mcal's own peripheral list and to
+#                         checkout each peripheral repository's latest commit.
+# ------------------------------------------------------------------------------
+function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
+
+    # ----------------------------------------------------------
+    # Clone (or reuse) a scratch copy of Mcal itself, purely to
+    # read its .gitmodules - Mcal is never added as a submodule.
+    # ----------------------------------------------------------
+    set(MCAL_CACHE_PATH "${CACHE_PATH}/Mcal")
+
+    if(NOT EXISTS "${MCAL_CACHE_PATH}/.git")
+        GitHandler_CloneMin(${IN_MCAL_REPO_URL} ${MCAL_CACHE_PATH})
+    endif()
+
+    GitHandler_SwitchBranch(${MCAL_CACHE_PATH} ${IN_BRANCH_NAME})
+
+    GitHandler_GetSubmoduleList(${MCAL_CACHE_PATH}
+                                MCAL_SUB_PATHS
+                                MCAL_SUB_URLS
+                                MCAL_SUB_ACTIVES
+                                MCAL_SUB_COUNT)
+
+    set(MCAL_REL_PATH "${BSP_REL_PATH}/Mcal")
+    set(MCAL_ADDED_MODULES "")
+
+    if(MCAL_SUB_COUNT GREATER 0)
+
+        math(EXPR MCAL_LAST_INDEX "${MCAL_SUB_COUNT} - 1")
+
+        foreach(idx RANGE 0 ${MCAL_LAST_INDEX})
+
+            list(GET MCAL_SUB_PATHS   ${idx} MCAL_SUB_NAME)
+            list(GET MCAL_SUB_URLS    ${idx} MCAL_SUB_URL)
+            list(GET MCAL_SUB_ACTIVES ${idx} MCAL_SUB_ACTIVE)
+
+            message(STATUS "*********************************************************")
+            message(STATUS "Processing Mcal peripheral: ${MCAL_SUB_NAME}")
+            message(DEBUG "  URL: ${MCAL_SUB_URL}")
+            message(STATUS "*********************************************************")
+
+            # --------------------------------------------------
+            # Only compose peripherals that actually have the
+            # selected family branch available.
+            # --------------------------------------------------
+            GitHandler_RemoteBranchExists(${MCAL_SUB_URL} ${IN_BRANCH_NAME} MCAL_SUB_BRANCH_EXISTS)
+
+            if(NOT MCAL_SUB_BRANCH_EXISTS)
+                message(WARNING "Mcal peripheral '${MCAL_SUB_NAME}' has no branch '${IN_BRANCH_NAME}' - skipping.")
+                continue()
+            endif()
+
+            set(LOCAL_MCAL_SUB_PATH "${PROJECT_ROOT_PATH}/${MCAL_REL_PATH}/${MCAL_SUB_NAME}")
+
+            if(EXISTS "${LOCAL_MCAL_SUB_PATH}/.git")
+
+                message(DEBUG "GIT submodule already found in ${LOCAL_MCAL_SUB_PATH}")
+
+            else()
+
+                GitHandler_SubmoduleInit(${MCAL_SUB_URL} "${MCAL_REL_PATH}/${MCAL_SUB_NAME}" ${MCAL_SUB_ACTIVE})
+
+                # Ignore submodule changes in parent directory
+                GitHandler_SubmoduleIgnore("${MCAL_REL_PATH}/${MCAL_SUB_NAME}" "dirty")
+
+            endif()
+
+            # --------------------------------------------------
+            # Always checkout the LATEST commit of the family
+            # branch (never a pinned commit) for each peripheral.
+            # --------------------------------------------------
+            GitHandler_SwitchBranch(${LOCAL_MCAL_SUB_PATH} ${IN_BRANCH_NAME})
+
+            list(APPEND MCAL_ADDED_MODULES "${MCAL_SUB_NAME}")
+
+        endforeach()
+
+    else()
+
+        message(WARNING "No peripheral repositories declared in Mcal's .gitmodules on branch ${IN_BRANCH_NAME}.")
+
+    endif()
+
+    Bsp_ModuleHandler_McalCMakeListsGenerate("${MCAL_ADDED_MODULES}")
+
+    message(STATUS "Mcal peripheral composition complete (${MCAL_ADDED_MODULES}).")
+
+endfunction()
+
+
 #-------------------------------------------------------------------------------
 # Configuration BSP module.
 #
@@ -201,6 +348,12 @@ endfunction()
 # The BSP GIT submodules are initialized if needed, or its commits are switched
 # in regards of configuration. The user can easily switch MCU family, or 
 # initialize the BSP module. 
+#
+# Special case - Mcal: Mcal itself is NEVER added as a GIT submodule. Instead,
+# its repository is inspected (see Bsp_ModuleHandler_McalPeripheralsInit) and
+# every peripheral repository it currently declares (Rcc, Nvic, Gpio, ...) is
+# added as an individual submodule directly under Bsp/Mcal, each checked out
+# at the LATEST commit of the selected family branch (never a pinned commit).
 #
 # IN_BRANCH_ID [in]: Branch numerical identification (e.g. 1 for STM32G4_Dev)
 #-------------------------------------------------------------------------------
@@ -254,6 +407,19 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
             if("${SUB_COMMIT}" STREQUAL "")
                 message(DEBUG "Submodule ${SUB_NAME} does not exist on branch ${BRANCH_NAME}")
                 continue()
+            endif()
+
+            # ------------------------------------------------------
+            # Mcal special case: never add Mcal itself as a submodule -
+            # compose Bsp/Mcal from its own peripheral repositories
+            # instead (see Bsp_ModuleHandler_McalPeripheralsInit).
+            # ------------------------------------------------------
+            if("${SUB_NAME}" STREQUAL "Mcal")
+
+                Bsp_ModuleHandler_McalPeripheralsInit(${SUB_URL} ${BRANCH_NAME})
+
+                continue()
+
             endif()
             
             # ------------------------------------------------------
