@@ -47,9 +47,9 @@
 			<locationURI>PROJECT_ROOT/Middlewares</locationURI>
 		</link>
 		<link>
-			<name>EmB_Platform</name>
+			<name>EmBi_Platform</name>
 			<type>2</type>
-			<locationURI>PROJECT_ROOT/EmB_Platform</locationURI>
+			<locationURI>PROJECT_ROOT/EmBi_Platform</locationURI>
 		</link>
 	</linkedResources>
 	<variableList>
