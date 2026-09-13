@@ -10,7 +10,12 @@
 # ├── Bsp                           (Board Support Packages)
 # │   ├── Hal                       (Hardware Abstraction Layer)
 # │   ├── Linker                    (Linker generator module)
-# │   ├── Mcal                      (Micro-Controller Abstraction Layer)
+# │   ├── Mcal                      (Micro-Controller Abstraction Layer -
+# │   │   NOT a single submodule; composed of the
+# │   │   individual peripheral repositories Mcal
+# │   │   itself declares, e.g. Rcc, Nvic, Gpio,
+# │   │   Exti, ... - see
+# │   │   Bsp_ModuleHandler_McalPeripheralsInit)
 # │   ├── Ral                       (Register Abstraction Layer)
 # │   └── Startup                   (Startup handler)
 # │                                 
@@ -97,31 +102,25 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
-# Function: Bsp_ModuleHandler_DocsInit
-# Description: Initialize Documentation cache (if needed).
+# Function: Bsp_ModuleHandler_DocsBranchList
+# Description:
+#   Returns the list of Docs repository branches WITHOUT cloning it - the
+#   Docs repository is large, so listing its branches must never trigger a
+#   full clone (a plain `git ls-remote` against the URL is used instead, see
+#   GitHandler_ListRemoteBranches). The "main"/"master" branch is filtered
+#   out of the result, since Docs content is only ever selected per-topic/
+#   per-family branch, never from the default branch.
+#
+# OUT_BRANCH_LIST [out]: Filtered list of Docs repository branch names.
 # ------------------------------------------------------------------------------
-function(Bsp_ModuleHandler_DocsRepoInit)
+function(Bsp_ModuleHandler_DocsBranchList OUT_BRANCH_LIST)
 
-    if(EXISTS "${DOCS_PATH}" AND IS_DIRECTORY "${DOCS_PATH}")
-    
-        file(GLOB DIR_CONTENTS "${DOCS_PATH}/*")
-    
-        if(DIR_CONTENTS)
-            set(BSP_CLONED TRUE)
-        else()
-            set(BSP_CLONED FALSE)
-        endif()
-    
-    else()
-        set(BSP_CLONED FALSE)
-    endif()
+    GitHandler_ListRemoteBranches(${DOCS_REPO_URL} BRANCH_LIST)
 
-    if(NOT BSP_CLONED)
+    list(REMOVE_ITEM BRANCH_LIST "main")
+    list(REMOVE_ITEM BRANCH_LIST "master")
 
-        # 1️: Execute initial BSP repository clone without submodules
-        GitHandler_CloneMin(${DOCS_REPO_URL} ${DOCS_PATH})
-        
-    endif()
+    set(${OUT_BRANCH_LIST} ${BRANCH_LIST} PARENT_SCOPE)
 
 endfunction()
 
@@ -139,7 +138,9 @@ endfunction()
 #   │       ├── BspMain.h     (BSP main header file)
 #   │       └── CMakeLists.txt (BspMain CMake file)
 #   │
-#   ├── Mcal                 (Micro-Controller Abstraction Layer)
+#   ├── Mcal                 (Micro-Controller Abstraction Layer - populated
+#   │   with Mcal's own peripheral submodules, see
+#   │   Bsp_ModuleHandler_McalPeripheralsInit)
 #   ├── Ral                  (Register Abstraction Layer)
 #   ├── Linker               (Linker generator module)
 #   └── Startup              (Startup handler)
@@ -311,10 +312,13 @@ function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
 
             else()
 
-                GitHandler_SubmoduleInit(${MCAL_SUB_URL} "${MCAL_REL_PATH}/${MCAL_SUB_NAME}" ${MCAL_SUB_ACTIVE})
+                GitHandler_SubmoduleInit(${MCAL_SUB_URL} "${MCAL_REL_PATH}/${MCAL_SUB_NAME}" ${MCAL_SUB_ACTIVE} MCAL_SUB_IS_SUBMODULE)
 
-                # Ignore submodule changes in parent directory
-                GitHandler_SubmoduleIgnore("${MCAL_REL_PATH}/${MCAL_SUB_NAME}" "dirty")
+                # Ignore submodule changes in parent directory (meaningless for a
+                # plain clone fallback - EmBi platform is not itself a GIT repo)
+                if(MCAL_SUB_IS_SUBMODULE)
+                    GitHandler_SubmoduleIgnore("${MCAL_REL_PATH}/${MCAL_SUB_NAME}" "dirty")
+                endif()
 
             endif()
 
@@ -333,6 +337,13 @@ function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
         message(WARNING "No peripheral repositories declared in Mcal's .gitmodules on branch ${IN_BRANCH_NAME}.")
 
     endif()
+
+    # ----------------------------------------------------------
+    # Remove any Bsp/Mcal/<X> peripheral submodule left over from a
+    # PREVIOUS family/branch that the currently selected one doesn't
+    # declare anymore.
+    # ----------------------------------------------------------
+    GitHandler_PruneStaleSubmodules("${MCAL_REL_PATH}" "${MCAL_ADDED_MODULES}")
 
     Bsp_ModuleHandler_McalCMakeListsGenerate("${MCAL_ADDED_MODULES}")
 
@@ -384,6 +395,13 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
     message(DEBUG "Submodules count returned: ${SUBMODULES_COUNT}")
 
     # ----------------------------------------------------------
+    # Names of submodules actually valid for the selected branch -
+    # used afterwards to prune anything left over from a PREVIOUS
+    # family/branch selection that no longer applies.
+    # ----------------------------------------------------------
+    set(PROCESSED_SUB_NAMES "")
+
+    # ----------------------------------------------------------
     # 3️: Find commit hash for every submodule in current branch
     # ----------------------------------------------------------
     if(SUBMODULE_COUNT GREATER 0)
@@ -409,6 +427,9 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
                 continue()
             endif()
 
+            # This submodule IS valid for the selected branch - keep it.
+            list(APPEND PROCESSED_SUB_NAMES "${SUB_NAME}")
+
             # ------------------------------------------------------
             # Mcal special case: never add Mcal itself as a submodule -
             # compose Bsp/Mcal from its own peripheral repositories
@@ -432,12 +453,15 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
                 message(DEBUG "GIT submodule already found in ${LOCAL_SUB_PATH}")
                 
             else()
-            
-                GitHandler_SubmoduleInit(${SUB_URL} "${BSP_REL_PATH}/${SUB_NAME}" ${SUB_ACTIVE})
-                
-                # Ignore submodule changes in parent directory
-                GitHandler_SubmoduleIgnore("${BSP_REL_PATH}/${SUB_NAME}" "dirty")
-                
+
+                GitHandler_SubmoduleInit(${SUB_URL} "${BSP_REL_PATH}/${SUB_NAME}" ${SUB_ACTIVE} SUB_IS_SUBMODULE)
+
+                # Ignore submodule changes in parent directory (meaningless for a
+                # plain clone fallback - EmBi platform is not itself a GIT repo)
+                if(SUB_IS_SUBMODULE)
+                    GitHandler_SubmoduleIgnore("${BSP_REL_PATH}/${SUB_NAME}" "dirty")
+                endif()
+
             endif()
         
             # ------------------------------------------------------
@@ -452,6 +476,12 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
         message(WARNING "No submodules found in branch ${BRANCH_NAME}.")
     
     endif()
+
+    # ----------------------------------------------------------
+    # Remove any Bsp/<X> submodule left over from a PREVIOUS family/
+    # branch selection that isn't valid for the one just selected.
+    # ----------------------------------------------------------
+    GitHandler_PruneStaleSubmodules("${BSP_REL_PATH}" "${PROCESSED_SUB_NAMES}")
     
     # Copy content of BSP module from repository into project
     file(GLOB FILES_ONLY "${CACHE_PATH}/*")
@@ -495,14 +525,14 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
-# Function: Bsp_BranchHandler_PrintBranchList
-# Description: Prints all available BSP branches available in repository.
+# Function: Bsp_ModuleHandler_PrintDocsBranchList
+# Description: Prints all available Docs branches (main/master filtered out),
+#              WITHOUT cloning the Docs repository (it is large) - see
+#              Bsp_ModuleHandler_DocsBranchList.
 # ------------------------------------------------------------------------------
 function(Bsp_ModuleHandler_PrintDocsBranchList)
 
-    Bsp_ModuleHandler_DocsRepoInit()
-
-    GitHandler_GetRemoteBranchList(${DOCS_PATH} GIT_BRANCHES)
+    Bsp_ModuleHandler_DocsBranchList(GIT_BRANCHES)
     
     # Print to console    
     list(LENGTH GIT_BRANCHES count)
@@ -522,17 +552,37 @@ endfunction()
 
 # ------------------------------------------------------------------------------
 # Function: Bsp_ModuleHandler_DocsInit
-# Description: Downloads Docs submodule.
+# Description:
+#   Downloads Docs content for the selected branch. Only that ONE branch is
+#   ever downloaded - a fresh clone uses GitHandler_CloneSingleBranch (never
+#   the full Docs repository), and if a Docs clone already exists from a
+#   previous run (possibly on a different branch), only the newly selected
+#   branch is additionally fetched (GitHandler_FetchAndTrackBranch) instead
+#   of re-cloning everything.
 #
 # IN_BRANCH_ID [in]: Branch numerical identification (e.g. 1 for STM32G4_Dev)
 # ------------------------------------------------------------------------------
 function(Bsp_ModuleHandler_DocsInit IN_BRANCH_ID)
-    
-    GitHandler_GetRemoteBranchList(${DOCS_PATH} GIT_BRANCHES)
+
+    Bsp_ModuleHandler_DocsBranchList(GIT_BRANCHES)
     
     list(GET GIT_BRANCHES ${IN_BRANCH_ID} BRANCH_NAME)
     
     message(STATUS "Branch ${BRANCH_NAME} selected.")
+
+    if(EXISTS "${DOCS_PATH}/.git")
+
+        # A Docs clone already exists (possibly on a different branch) -
+        # just make this branch fetchable on it, instead of re-cloning.
+        GitHandler_FetchAndTrackBranch(${DOCS_PATH} ${BRANCH_NAME})
+
+    else()
+
+        # Fresh clone - only the selected branch is downloaded, never the
+        # full Docs repository (it is large).
+        GitHandler_CloneSingleBranch(${DOCS_REPO_URL} ${BRANCH_NAME} ${DOCS_PATH})
+
+    endif()
     
     GitHandler_SwitchBranch(${DOCS_PATH} ${BRANCH_NAME})
 

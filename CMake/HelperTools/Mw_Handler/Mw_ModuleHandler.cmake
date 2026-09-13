@@ -173,13 +173,16 @@ function(Mw_ModuleHandler_Config IN_MODULE_ID)
         message(DEBUG "Module already found in ${LOCAL_SUB_PATH}")
         
     else()
-    
-        GitHandler_SubmoduleInit(${SUB_URL} "${MW_REL_PATH}/${SUB_NAME}" ${SUB_ACTIVE})
-        
-        # Ignore submodule changes in parent directory
-        GitHandler_SubmoduleIgnore("${MW_REL_PATH}/${SUB_NAME}" "dirty")
-        
-    endif()    
+
+        GitHandler_SubmoduleInit(${SUB_URL} "${MW_REL_PATH}/${SUB_NAME}" ${SUB_ACTIVE} SUB_IS_SUBMODULE)
+
+        # Ignore submodule changes in parent directory (meaningless for a
+        # plain clone fallback - EmBi platform is not itself a GIT repo)
+        if(SUB_IS_SUBMODULE)
+            GitHandler_SubmoduleIgnore("${MW_REL_PATH}/${SUB_NAME}" "dirty")
+        endif()
+
+    endif()
     
     Mw_ModuleHandler_UpdateCMakeLists(${SUB_NAME})        
 
