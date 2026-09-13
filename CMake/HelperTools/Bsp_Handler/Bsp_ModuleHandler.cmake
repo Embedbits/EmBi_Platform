@@ -360,19 +360,26 @@ endfunction()
 # (its branches) and, per family, the list of submodules it declares (its
 # .gitmodules) - it is always advanced to the LATEST commit of the selected
 # family branch before that list is read, it is NEVER used to pin a specific
-# submodule commit. Each declared submodule is then, in turn, checked out at
-# the LATEST commit of that SAME family branch on its own remote (skipped
-# with a warning if that submodule's remote has no such branch) - never at
-# whatever commit the BSP repository's tree happens to record for it. The
-# user can easily switch MCU family this way, since every module always ends
-# up tracking the newest state of the currently selected family branch.
+# submodule commit or branch. Each declared submodule instead independently
+# declares, in that SAME .gitmodules (submodule.<name>.branch), which branch
+# of ITS OWN repository it tracks - this is the whole point of a GIT
+# submodule, and the selected BSP family branch name is NEVER assumed to
+# apply to a submodule directly (a submodule missing a declared branch is
+# skipped with a warning). Each submodule is then checked out at the LATEST
+# commit of ITS OWN declared branch (via GitHandler_GetSubmoduleBranch +
+# GitHandler_SwitchBranch), never at whatever commit the BSP repository's
+# tree happens to separately record for it. The user can easily switch MCU
+# family this way, since selecting a different BSP branch simply changes
+# which branch each submodule is declared to track in that branch's own
+# .gitmodules content.
 #
 # Special case - Mcal: Mcal itself is NEVER added as a GIT submodule. Instead,
 # its repository is inspected (see Bsp_ModuleHandler_McalPeripheralsInit) and
 # every peripheral repository it currently declares (Rcc, Nvic, Gpio, ...) is
 # added as an individual submodule directly under Bsp/Mcal, each checked out
-# at the LATEST commit of the selected family branch - the same convention
-# used here for BSP's own (non-Mcal) submodules.
+# at the LATEST commit of the selected BSP family branch directly (Mcal's own
+# peripherals are composed dynamically and do not declare a submodule branch
+# of their own - this differs from BSP's other, regular submodules above).
 #
 # IN_BRANCH_ID [in]: Branch numerical identification (e.g. 1 for STM32G4_Dev)
 #-------------------------------------------------------------------------------
@@ -432,32 +439,41 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
             message(STATUS "*********************************************************")
 
             # ------------------------------------------------------
-            # Only compose submodules that actually have the selected
-            # family branch available on their OWN remote - BSP never
-            # pins a specific commit for them (see function description).
-            # ------------------------------------------------------
-            GitHandler_RemoteBranchExists(${SUB_URL} ${BRANCH_NAME} SUB_BRANCH_EXISTS)
-
-            if(NOT SUB_BRANCH_EXISTS)
-                message(WARNING "Submodule '${SUB_NAME}' has no branch '${BRANCH_NAME}' - skipping.")
-                continue()
-            endif()
-
-            # This submodule IS valid for the selected branch - keep it.
-            list(APPEND PROCESSED_SUB_NAMES "${SUB_NAME}")
-
-            # ------------------------------------------------------
             # Mcal special case: never add Mcal itself as a submodule -
             # compose Bsp/Mcal from its own peripheral repositories
-            # instead (see Bsp_ModuleHandler_McalPeripheralsInit).
+            # instead (see Bsp_ModuleHandler_McalPeripheralsInit). Mcal
+            # uses BSP's own selected family branch directly, since its
+            # peripherals are composed dynamically and don't declare a
+            # submodule branch of their own - handled before the regular
+            # per-submodule branch lookup below, which does not apply here.
             # ------------------------------------------------------
             if("${SUB_NAME}" STREQUAL "Mcal")
+
+                list(APPEND PROCESSED_SUB_NAMES "${SUB_NAME}")
 
                 Bsp_ModuleHandler_McalPeripheralsInit(${SUB_URL} ${BRANCH_NAME})
 
                 continue()
 
             endif()
+
+            # ------------------------------------------------------
+            # Every other BSP submodule independently declares, in BSP's
+            # OWN .gitmodules, which branch of ITS OWN repository it
+            # tracks - that is exactly the purpose of a GIT submodule.
+            # BSP's selected family branch name is NEVER applied to a
+            # submodule directly; only the branch it itself declares is
+            # used (a submodule with none declared is skipped).
+            # ------------------------------------------------------
+            GitHandler_GetSubmoduleBranch(${CACHE_PATH} ${SUB_NAME} SUB_BRANCH)
+
+            if("${SUB_BRANCH}" STREQUAL "")
+                message(WARNING "Submodule '${SUB_NAME}' declares no branch in .gitmodules - skipping.")
+                continue()
+            endif()
+
+            # This submodule declares a branch to track - keep it.
+            list(APPEND PROCESSED_SUB_NAMES "${SUB_NAME}")
 
             # ------------------------------------------------------
             # Add git submodule
@@ -481,10 +497,11 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
             endif()
 
             # ------------------------------------------------------
-            # Always checkout the LATEST commit of the family branch
-            # (never a pinned commit) - same convention as Mcal peripherals.
+            # Always checkout the LATEST commit of the submodule's OWN
+            # declared branch (never BSP's family branch, never a pinned
+            # commit).
             # ------------------------------------------------------
-            GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${BRANCH_NAME})
+            GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${SUB_BRANCH})
 
         endforeach()
 

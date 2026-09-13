@@ -116,17 +116,59 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
+# Function: GitHandler_GetSubmoduleBranch
+# Description:
+#   Returns the branch a GIT submodule is declared to track, as recorded by
+#   its parent repository's .gitmodules (the standard
+#   `submodule.<name>.branch` config field). This is the whole point of a
+#   GIT submodule: it independently declares which branch of ITS OWN
+#   repository it follows - the parent repository's own currently checked
+#   out branch/commit is irrelevant to that and must NOT be applied to it.
+#
+#   Since .gitmodules is itself a tracked file, a different branch of the
+#   PARENT repository can (and typically does, for a per-family BSP setup)
+#   declare a different branch per submodule for that family - e.g. BSP's
+#   "STM32G4" branch's .gitmodules can point "Linker" at branch "STM32G4"
+#   while pointing "Startup" at a differently named (or shared) branch, all
+#   correctly resolved just by reading THIS branch/commit's .gitmodules.
+#
+# IN_SOURCE_PATH    [in]: Path to the submodule's parent repository (the one
+#                          containing the .gitmodules file to read from).
+# IN_SUBMODULE_NAME [in]: Name of the GIT submodule (its .gitmodules section).
+# OUT_BRANCH       [out]: Declared branch name, or an empty string if the
+#                          submodule does not declare one in .gitmodules.
+# ------------------------------------------------------------------------------
+function(GitHandler_GetSubmoduleBranch IN_SOURCE_PATH IN_SUBMODULE_NAME OUT_BRANCH)
+
+    set(GITMODULES_FILE "${IN_SOURCE_PATH}/.gitmodules")
+
+    execute_process(COMMAND git config -f "${GITMODULES_FILE}" submodule.${IN_SUBMODULE_NAME}.branch
+                    OUTPUT_VARIABLE SUB_BRANCH
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+
+    if("${SUB_BRANCH}" STREQUAL "")
+        message(DEBUG "Submodule '${IN_SUBMODULE_NAME}' declares no branch in ${GITMODULES_FILE}")
+    endif()
+
+    set(${OUT_BRANCH} "${SUB_BRANCH}" PARENT_SCOPE)
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
 # Function: GitHandler_GetCommitId
 # Description: Returns GIT submodule's PINNED commit ID, i.e. the exact commit
 #              the submodule's parent repository records for it on a given
 #              branch (via `git ls-tree`).
 #
 #              NOTE: no longer used by Bsp_ModuleHandler_Config - BSP's own
-#              submodules are now always switched to the LATEST commit of the
-#              matching family branch (same as Mcal's peripherals), not to
-#              this pinned commit, so BSP itself only ever acts as a list of
-#              available MCU families/submodules. Kept as a general-purpose
-#              GIT helper for any future use that does need a pinned lookup.
+#              submodules are now always switched to the LATEST commit of
+#              whichever branch THEY THEMSELVES declare in .gitmodules (see
+#              GitHandler_GetSubmoduleBranch), not to this pinned commit, so
+#              BSP itself only ever acts as a list of available MCU families/
+#              submodules. Kept as a general-purpose GIT helper for any
+#              future use that does need a pinned lookup.
 #
 # IN_SOURCE_PATH    [in]: Path to the submodules parent repository.
 # IN_BRANCH_NAME    [in]: Branch name of the submodules parent repository.
