@@ -120,17 +120,13 @@ endfunction()
 # Description:
 #   Returns the branch a GIT submodule is declared to track, as recorded by
 #   its parent repository's .gitmodules (the standard
-#   `submodule.<name>.branch` config field). This is the whole point of a
-#   GIT submodule: it independently declares which branch of ITS OWN
-#   repository it follows - the parent repository's own currently checked
-#   out branch/commit is irrelevant to that and must NOT be applied to it.
+#   `submodule.<name>.branch` config field), IF that field is set.
 #
-#   Since .gitmodules is itself a tracked file, a different branch of the
-#   PARENT repository can (and typically does, for a per-family BSP setup)
-#   declare a different branch per submodule for that family - e.g. BSP's
-#   "STM32G4" branch's .gitmodules can point "Linker" at branch "STM32G4"
-#   while pointing "Startup" at a differently named (or shared) branch, all
-#   correctly resolved just by reading THIS branch/commit's .gitmodules.
+#   NOTE: EmBi's BSP repository does not actually use this field on any of
+#   its submodules (verified empirically) - GitHandler_ResolveBranchFromCommit
+#   is what Bsp_ModuleHandler_Config actually uses instead (derives the
+#   branch from the submodule's currently pinned commit). Kept as a general-
+#   purpose GIT helper in case some OTHER repository/handler does declare it.
 #
 # IN_SOURCE_PATH    [in]: Path to the submodule's parent repository (the one
 #                          containing the .gitmodules file to read from).
@@ -162,13 +158,11 @@ endfunction()
 #              the submodule's parent repository records for it on a given
 #              branch (via `git ls-tree`).
 #
-#              NOTE: no longer used by Bsp_ModuleHandler_Config - BSP's own
-#              submodules are now always switched to the LATEST commit of
-#              whichever branch THEY THEMSELVES declare in .gitmodules (see
-#              GitHandler_GetSubmoduleBranch), not to this pinned commit, so
-#              BSP itself only ever acts as a list of available MCU families/
-#              submodules. Kept as a general-purpose GIT helper for any
-#              future use that does need a pinned lookup.
+#              Used by Bsp_ModuleHandler_Config purely as a STARTING POINT to
+#              discover which of the submodule's OWN branches it belongs to
+#              (see GitHandler_ResolveBranchFromCommit) - the submodule is
+#              then switched to the LATEST commit of that discovered branch,
+#              never left pinned at this exact commit.
 #
 # IN_SOURCE_PATH    [in]: Path to the submodules parent repository.
 # IN_BRANCH_NAME    [in]: Branch name of the submodules parent repository.
@@ -213,7 +207,76 @@ function(GitHandler_GetCommitId IN_SOURCE_PATH IN_BRANCH_NAME IN_SUBMODULE_NAME 
     else()
         set(${OUT_COMMIT_ID} ${SUB_COMMIT} PARENT_SCOPE)
     endif()
-            
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: GitHandler_ResolveBranchFromCommit
+# Description:
+#   Determines which of a (already cloned) repository's OWN remote branches
+#   a given commit belongs to (`git branch -r --contains`) - this is how a
+#   BSP submodule's tracked branch is discovered when .gitmodules declares
+#   no explicit `branch` field for it: BSP only pins the submodule at a
+#   specific COMMIT for the selected family (see GitHandler_GetCommitId);
+#   that commit's OWN branch is then resolved here, so the submodule can be
+#   switched to the LATEST commit of that branch instead of staying pinned.
+#
+#   If several remote branches contain the commit, the first one reported
+#   by `git branch -r --contains` is used (excluding the `origin/HEAD -> ...`
+#   alias line, which is not a real branch).
+#
+# IN_TARGET_PATH [in]: Path to the (already cloned) submodule repository.
+# IN_COMMIT_ID   [in]: Commit to resolve the owning branch of.
+# OUT_BRANCH    [out]: Resolved branch name (without the "origin/" prefix),
+#                       or an empty string if no remote branch contains it.
+# ------------------------------------------------------------------------------
+function(GitHandler_ResolveBranchFromCommit IN_TARGET_PATH IN_COMMIT_ID OUT_BRANCH)
+
+    # Make sure the commit (and the history of every remote branch) is
+    # actually present locally - a fresh/partial clone could otherwise make
+    # the --contains lookup below silently find nothing.
+    execute_process(COMMAND git fetch origin
+                    WORKING_DIRECTORY "${IN_TARGET_PATH}"
+                    OUTPUT_QUIET
+                    ERROR_QUIET)
+
+    execute_process(COMMAND git branch -r --contains ${IN_COMMIT_ID}
+                    WORKING_DIRECTORY "${IN_TARGET_PATH}"
+                    OUTPUT_VARIABLE BRANCH_OUTPUT
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+
+    if("${BRANCH_OUTPUT}" STREQUAL "")
+        message(DEBUG "No remote branch in '${IN_TARGET_PATH}' contains commit ${IN_COMMIT_ID}")
+        set(${OUT_BRANCH} "" PARENT_SCOPE)
+        return()
+    endif()
+
+    string(REPLACE "\r" "" BRANCH_OUTPUT "${BRANCH_OUTPUT}")
+    string(REPLACE "\n" ";" BRANCH_LINES "${BRANCH_OUTPUT}")
+
+    set(RESOLVED_BRANCH "")
+
+    foreach(LINE ${BRANCH_LINES})
+
+        string(STRIP "${LINE}" LINE)
+
+        # Skip the "origin/HEAD -> origin/<default>" alias line - not a
+        # real branch.
+        if(LINE MATCHES " -> ")
+            continue()
+        endif()
+
+        if(LINE MATCHES "^origin/(.+)$")
+            set(RESOLVED_BRANCH "${CMAKE_MATCH_1}")
+            break()
+        endif()
+
+    endforeach()
+
+    set(${OUT_BRANCH} "${RESOLVED_BRANCH}" PARENT_SCOPE)
+
 endfunction()
 
 

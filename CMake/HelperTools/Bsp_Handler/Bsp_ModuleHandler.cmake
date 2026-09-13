@@ -359,27 +359,30 @@ endfunction()
 # The BSP repository itself only serves as a LIST of available MCU families
 # (its branches) and, per family, the list of submodules it declares (its
 # .gitmodules) - it is always advanced to the LATEST commit of the selected
-# family branch before that list is read, it is NEVER used to pin a specific
-# submodule commit or branch. Each declared submodule instead independently
-# declares, in that SAME .gitmodules (submodule.<name>.branch), which branch
-# of ITS OWN repository it tracks - this is the whole point of a GIT
-# submodule, and the selected BSP family branch name is NEVER assumed to
-# apply to a submodule directly (a submodule missing a declared branch is
-# skipped with a warning). Each submodule is then checked out at the LATEST
-# commit of ITS OWN declared branch (via GitHandler_GetSubmoduleBranch +
-# GitHandler_SwitchBranch), never at whatever commit the BSP repository's
-# tree happens to separately record for it. The user can easily switch MCU
-# family this way, since selecting a different BSP branch simply changes
-# which branch each submodule is declared to track in that branch's own
-# .gitmodules content.
+# family branch before that list is read. BSP's OWN pinned commit for a
+# submodule (its GIT "gitlink", resolved via GitHandler_GetCommitId) is used
+# ONLY as a starting point to discover which branch of the submodule's OWN
+# repository it belongs to (GitHandler_ResolveBranchFromCommit does a
+# `git branch -r --contains` lookup) - it is NEVER checked out directly.
+# That discovered branch is exactly the one the submodule itself tracks
+# (this repo's submodules declare no explicit `submodule.<name>.branch` in
+# .gitmodules, so it must be derived this way rather than read directly).
+# The submodule is then switched to the LATEST commit of THAT branch, never
+# left pinned at the old recorded commit, and BSP's selected family branch
+# NAME is never assumed to apply to a submodule directly - each one is only
+# ever followed via whichever branch its own currently pinned commit
+# actually belongs to. The user can easily switch MCU family this way, since
+# selecting a different BSP branch simply changes which commit (and, in
+# turn, which branch) each submodule resolves to.
 #
 # Special case - Mcal: Mcal itself is NEVER added as a GIT submodule. Instead,
 # its repository is inspected (see Bsp_ModuleHandler_McalPeripheralsInit) and
 # every peripheral repository it currently declares (Rcc, Nvic, Gpio, ...) is
 # added as an individual submodule directly under Bsp/Mcal, each checked out
 # at the LATEST commit of the selected BSP family branch directly (Mcal's own
-# peripherals are composed dynamically and do not declare a submodule branch
-# of their own - this differs from BSP's other, regular submodules above).
+# peripherals are composed dynamically, so there is no pinned commit to
+# resolve a branch from - this differs from BSP's other, regular submodules
+# above).
 #
 # IN_BRANCH_ID [in]: Branch numerical identification (e.g. 1 for STM32G4_Dev)
 #-------------------------------------------------------------------------------
@@ -458,21 +461,18 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
             endif()
 
             # ------------------------------------------------------
-            # Every other BSP submodule independently declares, in BSP's
-            # OWN .gitmodules, which branch of ITS OWN repository it
-            # tracks - that is exactly the purpose of a GIT submodule.
-            # BSP's selected family branch name is NEVER applied to a
-            # submodule directly; only the branch it itself declares is
-            # used (a submodule with none declared is skipped).
+            # Resolve the commit BSP currently pins this submodule at, on
+            # the selected family branch - used only as a starting point to
+            # find the submodule's OWN branch (see below), never checked
+            # out directly.
             # ------------------------------------------------------
-            GitHandler_GetSubmoduleBranch(${CACHE_PATH} ${SUB_NAME} SUB_BRANCH)
+            GitHandler_GetCommitId(${CACHE_PATH} ${BRANCH_NAME} ${SUB_NAME} SUB_PINNED_COMMIT)
 
-            if("${SUB_BRANCH}" STREQUAL "")
-                message(WARNING "Submodule '${SUB_NAME}' declares no branch in .gitmodules - skipping.")
+            if("${SUB_PINNED_COMMIT}" STREQUAL "")
+                message(WARNING "Submodule '${SUB_NAME}' does not exist on branch '${BRANCH_NAME}' - skipping.")
                 continue()
             endif()
 
-            # This submodule declares a branch to track - keep it.
             list(APPEND PROCESSED_SUB_NAMES "${SUB_NAME}")
 
             # ------------------------------------------------------
@@ -497,11 +497,21 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
             endif()
 
             # ------------------------------------------------------
-            # Always checkout the LATEST commit of the submodule's OWN
-            # declared branch (never BSP's family branch, never a pinned
-            # commit).
+            # Determine which of the submodule's OWN branches its pinned
+            # commit belongs to (that is exactly the purpose of a GIT
+            # submodule - it independently tracks its own branch; BSP's
+            # selected family branch name is NEVER applied to it directly),
+            # then always take the LATEST commit of THAT branch instead of
+            # staying pinned at the (possibly old) recorded commit.
             # ------------------------------------------------------
-            GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${SUB_BRANCH})
+            GitHandler_ResolveBranchFromCommit(${LOCAL_SUB_PATH} ${SUB_PINNED_COMMIT} SUB_BRANCH)
+
+            if("${SUB_BRANCH}" STREQUAL "")
+                message(WARNING "Could not resolve which branch of '${SUB_NAME}' contains its pinned commit - staying at commit ${SUB_PINNED_COMMIT}.")
+                GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${SUB_PINNED_COMMIT})
+            else()
+                GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${SUB_BRANCH})
+            endif()
 
         endforeach()
 
