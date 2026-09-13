@@ -117,8 +117,16 @@ endfunction()
 
 # ------------------------------------------------------------------------------
 # Function: GitHandler_GetCommitId
-# Description: Returns GIT submodule's commit ID to which is submodules parent 
-#              repository pointing.
+# Description: Returns GIT submodule's PINNED commit ID, i.e. the exact commit
+#              the submodule's parent repository records for it on a given
+#              branch (via `git ls-tree`).
+#
+#              NOTE: no longer used by Bsp_ModuleHandler_Config - BSP's own
+#              submodules are now always switched to the LATEST commit of the
+#              matching family branch (same as Mcal's peripherals), not to
+#              this pinned commit, so BSP itself only ever acts as a list of
+#              available MCU families/submodules. Kept as a general-purpose
+#              GIT helper for any future use that does need a pinned lookup.
 #
 # IN_SOURCE_PATH    [in]: Path to the submodules parent repository.
 # IN_BRANCH_NAME    [in]: Branch name of the submodules parent repository.
@@ -128,6 +136,7 @@ endfunction()
 function(GitHandler_GetCommitId IN_SOURCE_PATH IN_BRANCH_NAME IN_SUBMODULE_NAME OUT_COMMIT_ID)
 
     execute_process(COMMAND git fetch --depth=0
+                    WORKING_DIRECTORY "${IN_SOURCE_PATH}"
                     OUTPUT_STRIP_TRAILING_WHITESPACE
                     ERROR_QUIET)
 
@@ -440,53 +449,67 @@ endfunction()
 # ------------------------------------------------------------------------------
 # Function: GitHandler_SwitchBranch
 # Description: Switch to required branch and fetch data with only ONE commit.
+#              Always lands on the LATEST commit that was just fetched for
+#              IN_COMMIT_ID - it checks out FETCH_HEAD (detached), rather than
+#              IN_COMMIT_ID itself. This matters because IN_COMMIT_ID is very
+#              often a branch name (e.g. a selected MCU family branch): a
+#              plain `git checkout <branch>` re-uses a local branch of that
+#              name if one already exists from a PREVIOUS run of this script
+#              (its tip does not move on its own just because the remote
+#              advanced), silently leaving the checkout on a stale commit even
+#              though the fetch above did pull the newest one. Checking out
+#              FETCH_HEAD instead guarantees the working tree always matches
+#              exactly what was just fetched, whether IN_COMMIT_ID is a branch
+#              name or a specific commit hash.
 #
 # IN_TARGET_PATH [in]: GIT repository path.
-# IN_COMMIT_ID   [in]: Target commit ID to be switched to.
+# IN_COMMIT_ID   [in]: Target branch name or commit ID to be switched to.
 # ------------------------------------------------------------------------------
 function(GitHandler_SwitchBranch IN_TARGET_PATH IN_COMMIT_ID)
 
     message(DEBUG "Function 'GitHandler_SwitchBranch' executed with parameters:")
     message(DEBUG "  IN_TARGET_PATH: ${IN_TARGET_PATH}")
     message(DEBUG "  IN_COMMIT_ID: ${IN_COMMIT_ID}")
-    
-    # 1. Fetch the commit(only one)
+
+    # 1. Fetch the commit (only one)
     execute_process(COMMAND git fetch origin ${IN_COMMIT_ID}
                     WORKING_DIRECTORY "${IN_TARGET_PATH}"
                     RESULT_VARIABLE FETCH_RESULT
                     OUTPUT_QUIET
                     ERROR_QUIET)
-    
+
     if(NOT FETCH_RESULT EQUAL 0)
         message(WARNING "Failed to fetch commit ${IN_COMMIT_ID} in '${IN_TARGET_PATH}' ")
         return()
     endif()
-    
-    # 1. Checkout to commit
-    execute_process(COMMAND git checkout ${IN_COMMIT_ID}
+
+    # 2. Checkout the just-fetched commit directly (detached HEAD), instead
+    #    of checking out IN_COMMIT_ID by name - see function description for
+    #    why (avoids reusing a stale pre-existing local branch of that name).
+    execute_process(COMMAND git checkout --detach FETCH_HEAD
                     WORKING_DIRECTORY "${IN_TARGET_PATH}"
                     RESULT_VARIABLE CHK_RESULT
                     OUTPUT_QUIET
                     ERROR_QUIET)
-    
+
     if(NOT CHK_RESULT EQUAL 0)
-        message(WARNING "Failed to checkout '${IN_TARGET_PATH}' to commit ${IN_COMMIT_ID}")
+        message(WARNING "Failed to checkout '${IN_TARGET_PATH}' to fetched ref '${IN_COMMIT_ID}'")
         return()
     endif()
-    
-    # 2. Hard reset (overwrite tracked files)
+
+    # 3. Hard reset (overwrite tracked files)
     execute_process(COMMAND git reset --hard
                     WORKING_DIRECTORY "${IN_TARGET_PATH}"
                     OUTPUT_QUIET 
                     ERROR_QUIET)
     
-    # 3. Clean (remove untracked files)
+    # 4. Clean (remove untracked files)
     execute_process(COMMAND git clean -fdx
                     WORKING_DIRECTORY "${IN_TARGET_PATH}"
-                    OUTPUT_QUIET 
+                    OUTPUT_QUIET
                     ERROR_QUIET)
-    
-    # 4. Update internal submodules (if submodule has own submodules)
+
+    # 5. Update internal submodules (if submodule has own submodules)
     if(EXISTS "${IN_TARGET_PATH}/.gitmodules")
         message(DEBUG "Updating nested submodules in ${IN_TARGET_PATH}")
         

@@ -355,43 +355,55 @@ endfunction()
 #-------------------------------------------------------------------------------
 # Configuration BSP module.
 #
-# Description: 
-# The BSP GIT submodules are initialized if needed, or its commits are switched
-# in regards of configuration. The user can easily switch MCU family, or 
-# initialize the BSP module. 
+# Description:
+# The BSP repository itself only serves as a LIST of available MCU families
+# (its branches) and, per family, the list of submodules it declares (its
+# .gitmodules) - it is always advanced to the LATEST commit of the selected
+# family branch before that list is read, it is NEVER used to pin a specific
+# submodule commit. Each declared submodule is then, in turn, checked out at
+# the LATEST commit of that SAME family branch on its own remote (skipped
+# with a warning if that submodule's remote has no such branch) - never at
+# whatever commit the BSP repository's tree happens to record for it. The
+# user can easily switch MCU family this way, since every module always ends
+# up tracking the newest state of the currently selected family branch.
 #
 # Special case - Mcal: Mcal itself is NEVER added as a GIT submodule. Instead,
 # its repository is inspected (see Bsp_ModuleHandler_McalPeripheralsInit) and
 # every peripheral repository it currently declares (Rcc, Nvic, Gpio, ...) is
 # added as an individual submodule directly under Bsp/Mcal, each checked out
-# at the LATEST commit of the selected family branch (never a pinned commit).
+# at the LATEST commit of the selected family branch - the same convention
+# used here for BSP's own (non-Mcal) submodules.
 #
 # IN_BRANCH_ID [in]: Branch numerical identification (e.g. 1 for STM32G4_Dev)
 #-------------------------------------------------------------------------------
 function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
-    
+
     Bsp_ModuleHandler_CacheInit()
-    
+
     Bsp_ModuleHandler_FolderStructInit()
-    
+
     GitHandler_GetRemoteBranchList(${CACHE_PATH} GIT_BRANCHES)
-    
+
     list(GET GIT_BRANCHES ${IN_BRANCH_ID} BRANCH_NAME)
-    
+
     message(STATUS "Branch ${BRANCH_NAME} selected.")
-    
+
+    # Always advance the BSP cache to the LATEST commit of the selected family
+    # branch - BSP is only ever a "family list", it is never itself pinned to
+    # an older commit (GitHandler_SwitchBranch checks out FETCH_HEAD, so a
+    # local branch left over from a previous run is never silently reused).
     GitHandler_SwitchBranch(${CACHE_PATH} ${BRANCH_NAME})
 
     # ----------------------------------------------------------
     # Load .gitmodules and extract submodules + UR's
     # ----------------------------------------------------------
-        
-    GitHandler_GetSubmoduleList(${CACHE_PATH} 
-                                SUBMODULE_PATHS 
-                                SUBMODULE_URLS 
-                                SUBMODULE_ACTIVES 
+
+    GitHandler_GetSubmoduleList(${CACHE_PATH}
+                                SUBMODULE_PATHS
+                                SUBMODULE_URLS
+                                SUBMODULE_ACTIVES
                                 SUBMODULE_COUNT)
-                                
+
     message(DEBUG "Submodules count returned: ${SUBMODULES_COUNT}")
 
     # ----------------------------------------------------------
@@ -402,28 +414,32 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
     set(PROCESSED_SUB_NAMES "")
 
     # ----------------------------------------------------------
-    # 3️: Find commit hash for every submodule in current branch
+    # Process every submodule BSP declares for the selected branch
     # ----------------------------------------------------------
     if(SUBMODULE_COUNT GREATER 0)
         math(EXPR LAST_INDEX "${SUBMODULE_COUNT} - 1")
-    
+
         foreach(idx RANGE 0 ${LAST_INDEX})
-            
+
             message(DEBUG "Processing submodule index: ${idx}")
             list(GET SUBMODULE_PATHS   ${idx} SUB_NAME)
             list(GET SUBMODULE_URLS    ${idx} SUB_URL)
             list(GET SUBMODULE_ACTIVES ${idx} SUB_ACTIVE)
-			
-			GitHandler_GetCommitId(${CACHE_PATH} ${BRANCH_NAME} ${SUB_NAME} SUB_COMMIT)
-        
+
             message(STATUS "*********************************************************")
             message(STATUS "Processing submodule: ${SUB_NAME}")
             message(DEBUG "  URL:    ${SUB_URL}")
-            message(DEBUG "  Commit: ${SUB_COMMIT}")
             message(STATUS "*********************************************************")
-            
-            if("${SUB_COMMIT}" STREQUAL "")
-                message(DEBUG "Submodule ${SUB_NAME} does not exist on branch ${BRANCH_NAME}")
+
+            # ------------------------------------------------------
+            # Only compose submodules that actually have the selected
+            # family branch available on their OWN remote - BSP never
+            # pins a specific commit for them (see function description).
+            # ------------------------------------------------------
+            GitHandler_RemoteBranchExists(${SUB_URL} ${BRANCH_NAME} SUB_BRANCH_EXISTS)
+
+            if(NOT SUB_BRANCH_EXISTS)
+                message(WARNING "Submodule '${SUB_NAME}' has no branch '${BRANCH_NAME}' - skipping.")
                 continue()
             endif()
 
@@ -442,16 +458,16 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
                 continue()
 
             endif()
-            
+
             # ------------------------------------------------------
             # Add git submodule
             # ------------------------------------------------------
             set(LOCAL_SUB_PATH "${PROJECT_ROOT_PATH}/${BSP_REL_PATH}/${SUB_NAME}")
-            
+
             if(EXISTS "${LOCAL_SUB_PATH}/.git")
-    
+
                 message(DEBUG "GIT submodule already found in ${LOCAL_SUB_PATH}")
-                
+
             else()
 
                 GitHandler_SubmoduleInit(${SUB_URL} "${BSP_REL_PATH}/${SUB_NAME}" ${SUB_ACTIVE} SUB_IS_SUBMODULE)
@@ -463,18 +479,19 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
                 endif()
 
             endif()
-        
+
             # ------------------------------------------------------
-            # Commit checkout
+            # Always checkout the LATEST commit of the family branch
+            # (never a pinned commit) - same convention as Mcal peripherals.
             # ------------------------------------------------------
-            GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${SUB_COMMIT})
-            
+            GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${BRANCH_NAME})
+
         endforeach()
-        
+
     else()
-    
+
         message(WARNING "No submodules found in branch ${BRANCH_NAME}.")
-    
+
     endif()
 
     # ----------------------------------------------------------
