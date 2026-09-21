@@ -502,10 +502,40 @@ function(GitHandler_SubmoduleRemove IN_SUBMODULE_PATH)
         # the state doesn't stay stuck for the next run.
         message(WARNING "Failed to 'git rm' submodule '${IN_SUBMODULE_PATH}' - Git said: ${RM_ERROR}. Falling back to a manual index/.gitmodules cleanup.")
 
-        execute_process(COMMAND git rm -f --cached -- ${IN_SUBMODULE_PATH}
+        # 'git rm --cached' is itself just as likely to hit the exact same
+        # "please stage your changes to .gitmodules" refusal as the plain
+        # 'git rm' above did (it also needs to edit .gitmodules as part of
+        # removing a submodule) - so it is NOT a safe fallback on its own,
+        # and its own failure must not be swallowed silently: a first
+        # real-world test of this fallback (2026-09-18) DID hit exactly that,
+        # leaving the path stuck in the index for good (a LATER re-add of the
+        # same path then failed with "already exists in the index", even
+        # though this function had already logged "Removed stale submodule").
+        # Stage whatever .gitmodules currently holds FIRST, so the 'git rm
+        # --cached' below no longer has anything unstaged to trip over.
+        execute_process(COMMAND git add .gitmodules
                         WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
                         OUTPUT_QUIET
                         ERROR_QUIET)
+
+        execute_process(COMMAND git rm -f --cached -- ${IN_SUBMODULE_PATH}
+                        WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                        RESULT_VARIABLE CACHED_RM_RESULT
+                        OUTPUT_QUIET
+                        ERROR_VARIABLE CACHED_RM_ERROR)
+
+        if(NOT CACHED_RM_RESULT EQUAL 0)
+            # Last resort: drop the path straight from the index, bypassing
+            # git's submodule/.gitmodules bookkeeping entirely - this is the
+            # one operation that cannot refuse over a dirty .gitmodules,
+            # since it never touches that file.
+            message(WARNING "'git rm --cached' also failed for '${IN_SUBMODULE_PATH}' - Git said: ${CACHED_RM_ERROR}. Forcing it out of the index directly.")
+
+            execute_process(COMMAND git update-index --force-remove -- ${IN_SUBMODULE_PATH}
+                            WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                            OUTPUT_QUIET
+                            ERROR_QUIET)
+        endif()
 
         execute_process(COMMAND git config -f .gitmodules --remove-section submodule.${IN_SUBMODULE_PATH}
                         WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
@@ -771,9 +801,25 @@ function(GitHandler_SubmoduleIgnore IN_SUBMODULE_PATH IN_IGNORE_TYPE)
                     WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
                     OUTPUT_QUIET
                     ERROR_QUIET)
-    
+
+    # `git config -f .gitmodules` above edits .gitmodules directly on disk,
+    # OUTSIDE git's staging area - it does not stage that edit the way
+    # `git submodule add` stages its own .gitmodules change. Left unstaged,
+    # this is exactly what caused a real failure (2026-09-18, confirmed via
+    # the ERROR_VARIABLE added to GitHandler_SubmoduleRemove): a LATER
+    # `git rm -f` on some other submodule refused with "fatal: please stage
+    # your changes to .gitmodules or stash them to proceed", because git
+    # itself also needs to edit .gitmodules for that removal and won't do so
+    # on top of an already-dirty (unstaged) working tree copy. Staging this
+    # edit immediately avoids leaving that trap for whatever git command
+    # touches .gitmodules next.
+    execute_process(COMMAND git add .gitmodules
+                    WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                    OUTPUT_QUIET
+                    ERROR_QUIET)
+
     message(DEBUG "Set ${IN_SUBMODULE_PATH} ignore to ${IN_IGNORE_TYPE}")
-    
+
 endfunction()
 
 # ------------------------------------------------------------------------------
