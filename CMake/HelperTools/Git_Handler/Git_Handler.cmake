@@ -42,7 +42,16 @@ function(GitHandler_GetSubmoduleList IN_SOURCE_PATH
 
     set(GITMODULES_FILE "${IN_SOURCE_PATH}/.gitmodules")
     if(NOT EXISTS "${GITMODULES_FILE}")
-        message(FATAL_ERROR "No .gitmodules file found in ${IN_SOURCE_PATH}")
+        # No .gitmodules at all is a valid state (e.g. Mcal declaring zero
+        # peripherals for a given family branch) - treat it the same as a
+        # .gitmodules file with zero [submodule] entries below, instead of
+        # aborting the whole script with a FATAL_ERROR.
+        message(WARNING "No .gitmodules file found in ${IN_SOURCE_PATH} - treating as zero submodules.")
+        set(${OUT_SUBMODULE_NAME_LIST} "" PARENT_SCOPE)
+        set(${OUT_SUBMODULE_URL_LIST} "" PARENT_SCOPE)
+        set(${OUT_SUBMODULE_ACTIVE_LIST} "" PARENT_SCOPE)
+        set(${OUT_SUBMODULES_COUNT} 0 PARENT_SCOPE)
+        return()
     endif()
 
     file(READ "${GITMODULES_FILE}" GITMODULES_CONTENTS)
@@ -276,6 +285,40 @@ function(GitHandler_ResolveBranchFromCommit IN_TARGET_PATH IN_COMMIT_ID OUT_BRAN
     endforeach()
 
     set(${OUT_BRANCH} "${RESOLVED_BRANCH}" PARENT_SCOPE)
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: GitHandler_GetHeadCommit
+# Description:
+#   Returns the commit a submodule/repository is CURRENTLY checked out at
+#   (a plain `git rev-parse HEAD`) - used by the lightweight BSP update path
+#   (Bsp_ModuleHandler_Update) to discover which branch an already-composed
+#   submodule is on (fed into GitHandler_ResolveBranchFromCommit instead of
+#   a BSP-pinned commit), without needing BSP's own cache/pinned commit at
+#   all.
+#
+# IN_TARGET_PATH [in]: Path to the (already cloned) repository/submodule.
+# OUT_COMMIT_ID [out]: Current HEAD commit hash, or an empty string if it
+#                       could not be determined (e.g. not a GIT repository).
+# ------------------------------------------------------------------------------
+function(GitHandler_GetHeadCommit IN_TARGET_PATH OUT_COMMIT_ID)
+
+    execute_process(COMMAND git rev-parse HEAD
+                    WORKING_DIRECTORY "${IN_TARGET_PATH}"
+                    OUTPUT_VARIABLE HEAD_COMMIT
+                    RESULT_VARIABLE RESULT_CODE
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+
+    if(NOT RESULT_CODE EQUAL 0)
+        message(DEBUG "Failed to resolve current HEAD commit in '${IN_TARGET_PATH}'")
+        set(${OUT_COMMIT_ID} "" PARENT_SCOPE)
+        return()
+    endif()
+
+    set(${OUT_COMMIT_ID} "${HEAD_COMMIT}" PARENT_SCOPE)
 
 endfunction()
 

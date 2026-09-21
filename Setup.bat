@@ -67,8 +67,9 @@ echo 3: Configure application layer
 echo 4: Configure BSP module
 echo 5: Update documents module
 echo 6: Configure Middleware module
+echo 7: Update BSP module (same branch)
 echo =====================================
-set /p choice=Enter your selection (0-6):
+set /p choice=Enter your selection (0-7):
 
 if "%choice%"=="0" goto MENU
 if "%choice%"=="1" goto RUN_INIT_PROJECT
@@ -77,6 +78,7 @@ if "%choice%"=="3" goto RUN_APP_CONFIG
 if "%choice%"=="4" goto RUN_BSP_CONFIG
 if "%choice%"=="5" goto RUN_DOCS_INIT
 if "%choice%"=="6" goto RUN_MW_CONFIG
+if "%choice%"=="7" goto RUN_BSP_UPDATE
 
 echo Incorrect selection. Try again.
 pause
@@ -120,6 +122,13 @@ set /p BRANCH_ID=Enter branch ID (numerical):
 cmake -DFUNCTION_ID="BSP_CONFIG" -DBRANCH_ID=%BRANCH_ID% -P CMake/HelperTools/Bsp_Handler/Bsp_ModuleHandler.cmake
 pause
 goto INITIALIZATION
+
+:RUN_BSP_UPDATE
+cls
+cmake -DFUNCTION_ID="BSP_UPDATE" -P CMake/HelperTools/Bsp_Handler/Bsp_ModuleHandler.cmake
+pause
+goto INITIALIZATION
+
 
 :RUN_DOCS_INIT
 cls

@@ -69,8 +69,9 @@ initialization() {
     echo "4: Configure BSP module"
     echo "5: Update documents module"
     echo "6: Configure Middleware module"
+    echo "7: Update BSP module (same branch)"
     echo "====================================="
-    read -p "Enter your selection (0-6): " choice
+    read -p "Enter your selection (0-7): " choice
     case "$choice" in
         0) menu ;;
         1) run_init_project ;;
@@ -79,6 +80,7 @@ initialization() {
         4) run_bsp_config ;;
         5) run_docs_init ;;
         6) run_mw_config ;;
+        7) run_bsp_update ;;
         *)
             echo "Incorrect selection. Try again."
             pause
@@ -115,6 +117,13 @@ run_bsp_config() {
     cmake -DFUNCTION_ID="BRANCH_LIST" -P CMake/HelperTools/Bsp_Handler/Bsp_ModuleHandler.cmake
     read -p "Enter branch ID (numerical): " BRANCH_ID
     cmake -DFUNCTION_ID="BSP_CONFIG" -DBRANCH_ID="$BRANCH_ID" -P CMake/HelperTools/Bsp_Handler/Bsp_ModuleHandler.cmake
+    pause
+    initialization
+}
+
+run_bsp_update() {
+    clear
+    cmake -DFUNCTION_ID="BSP_UPDATE" -P CMake/HelperTools/Bsp_Handler/Bsp_ModuleHandler.cmake
     pause
     initialization
 }

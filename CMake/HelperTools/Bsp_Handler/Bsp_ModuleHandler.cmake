@@ -543,6 +543,121 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
+# Function: Bsp_ModuleHandler_UpdateSubmoduleToLatest
+# Description:
+#   Updates a single, already-composed submodule checkout to the latest
+#   commit of the SAME branch it is currently on - the branch is discovered
+#   from the submodule's own current HEAD commit (GitHandler_GetHeadCommit +
+#   GitHandler_ResolveBranchFromCommit), exactly the same mechanism
+#   Bsp_ModuleHandler_Config uses the first time a submodule is composed,
+#   just re-applied to whatever commit it is presently sitting at instead
+#   of BSP's pinned commit - no BSP/Mcal cache lookup needed. Used by
+#   Bsp_ModuleHandler_Update for every submodule found under Bsp/.
+#
+# IN_SUBMODULE_PATH [in]: Absolute path to the (already cloned) submodule.
+# IN_LABEL          [in]: Human-readable label used only in log messages
+#                          (e.g. "Bsp/Ral" or "Bsp/Mcal/Rcc").
+# ------------------------------------------------------------------------------
+function(Bsp_ModuleHandler_UpdateSubmoduleToLatest IN_SUBMODULE_PATH IN_LABEL)
+
+    GitHandler_GetHeadCommit(${IN_SUBMODULE_PATH} CURRENT_COMMIT)
+
+    if("${CURRENT_COMMIT}" STREQUAL "")
+        message(WARNING "Could not determine current commit of '${IN_LABEL}' - skipping.")
+        return()
+    endif()
+
+    GitHandler_ResolveBranchFromCommit(${IN_SUBMODULE_PATH} ${CURRENT_COMMIT} SUB_BRANCH)
+
+    if("${SUB_BRANCH}" STREQUAL "")
+        message(WARNING "Could not resolve which branch '${IN_LABEL}' is currently on - skipping (stayed at ${CURRENT_COMMIT}).")
+        return()
+    endif()
+
+    message(STATUS "Updating '${IN_LABEL}' to the latest commit of branch '${SUB_BRANCH}'...")
+
+    GitHandler_SwitchBranch(${IN_SUBMODULE_PATH} ${SUB_BRANCH})
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Bsp_ModuleHandler_Update
+# Description:
+#   Fast update path for an ALREADY initialized BSP module: unlike
+#   Bsp_ModuleHandler_Config, it takes no BRANCH_ID and never touches the
+#   BSP/Mcal scratch caches - it only walks every submodule already
+#   composed on disk under Bsp/ (Linker, Ral, Startup, ... and, one level
+#   deeper, every Mcal peripheral under Bsp/Mcal/) and fast-forwards each
+#   one to the latest commit of whichever branch it is CURRENTLY on (see
+#   Bsp_ModuleHandler_UpdateSubmoduleToLatest). Since every affected
+#   submodule keeps tracking the branch it already had, this is exactly
+#   "update all affected submodules to the latest commit of the same
+#   branch" for the case where BSP was already initialized and the
+#   family/branch itself did not change.
+#
+#   If BSP was never initialized (Bsp/ folder missing, or contains no
+#   composed submodule at all), nothing is updated - run "Configure BSP
+#   module" first.
+# ------------------------------------------------------------------------------
+function(Bsp_ModuleHandler_Update)
+
+    set(BSP_ABS_PATH "${PROJECT_ROOT_PATH}/${BSP_REL_PATH}")
+
+    if(NOT EXISTS "${BSP_ABS_PATH}")
+        message(WARNING "Board Support Packages (BSP) module is not initialized yet - run 'Configure BSP module' first.")
+        return()
+    endif()
+
+    set(UPDATED_COUNT 0)
+
+    file(GLOB BSP_CHILD_ENTRIES RELATIVE "${BSP_ABS_PATH}" "${BSP_ABS_PATH}/*")
+
+    foreach(CHILD_NAME ${BSP_CHILD_ENTRIES})
+
+        set(CHILD_PATH "${BSP_ABS_PATH}/${CHILD_NAME}")
+
+        if(NOT IS_DIRECTORY "${CHILD_PATH}")
+            continue()
+        endif()
+
+        if(EXISTS "${CHILD_PATH}/.git")
+
+            # A regular BSP submodule (e.g. Linker, Ral, Startup).
+            Bsp_ModuleHandler_UpdateSubmoduleToLatest("${CHILD_PATH}" "${BSP_REL_PATH}/${CHILD_NAME}")
+            math(EXPR UPDATED_COUNT "${UPDATED_COUNT} + 1")
+
+        elseif("${CHILD_NAME}" STREQUAL "Mcal")
+
+            # Mcal itself is never a submodule - its individual peripheral
+            # repositories are, one level deeper.
+            file(GLOB MCAL_CHILD_ENTRIES RELATIVE "${CHILD_PATH}" "${CHILD_PATH}/*")
+
+            foreach(MCAL_CHILD_NAME ${MCAL_CHILD_ENTRIES})
+
+                set(MCAL_CHILD_PATH "${CHILD_PATH}/${MCAL_CHILD_NAME}")
+
+                if(IS_DIRECTORY "${MCAL_CHILD_PATH}" AND EXISTS "${MCAL_CHILD_PATH}/.git")
+                    Bsp_ModuleHandler_UpdateSubmoduleToLatest("${MCAL_CHILD_PATH}" "${BSP_REL_PATH}/Mcal/${MCAL_CHILD_NAME}")
+                    math(EXPR UPDATED_COUNT "${UPDATED_COUNT} + 1")
+                endif()
+
+            endforeach()
+
+        endif()
+
+    endforeach()
+
+    if(UPDATED_COUNT EQUAL 0)
+        message(WARNING "No composed BSP submodules found under '${BSP_REL_PATH}' - nothing to update. Run 'Configure BSP module' first.")
+    else()
+        message(STATUS "BSP update complete - ${UPDATED_COUNT} submodule(s) checked.")
+    endif()
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
 # Function: Bsp_BranchHandler_PrintBranchList
 # Description: Prints all available BSP branches available in repository.
 # ------------------------------------------------------------------------------
@@ -679,6 +794,10 @@ if(CMAKE_SCRIPT_MODE_FILE AND
             
         endif()
    
+    elseif("${FUNCTION_ID}" STREQUAL "BSP_UPDATE")
+
+        Bsp_ModuleHandler_Update()
+
     elseif("${FUNCTION_ID}" STREQUAL "DOCS_INIT")
         
         if(DEFINED BRANCH_ID)
