@@ -418,12 +418,18 @@ function(GitHandler_SubmoduleInit IN_REPO_URL IN_TARGET_PATH IN_ACTIVE_STATE OUT
                     WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
                     RESULT_VARIABLE ADD_RESULT
                     OUTPUT_QUIET
-                    ERROR_QUIET
+                    ERROR_VARIABLE ADD_ERROR
                     )
 
     if(NOT ADD_RESULT EQUAL 0)
 
-        message(WARNING "Failed to add submodule.")
+        # A very common cause here is a LEFTOVER .gitmodules/index entry for
+        # this exact path from an earlier, incompletely-removed submodule
+        # (see GitHandler_SubmoduleRemove) - git then refuses to add it again
+        # even though the working tree folder looks empty/gone. Surfacing
+        # git's own message (instead of a generic warning) makes that
+        # distinguishable from a real network/URL failure.
+        message(WARNING "Failed to add submodule '${IN_TARGET_PATH}'. Git said: ${ADD_ERROR}")
         set(${OUT_IS_SUBMODULE} FALSE PARENT_SCOPE)
         return()
 
@@ -472,23 +478,53 @@ function(GitHandler_SubmoduleRemove IN_SUBMODULE_PATH)
                     WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
                     RESULT_VARIABLE DEINIT_RESULT
                     OUTPUT_QUIET
-                    ERROR_QUIET)
+                    ERROR_VARIABLE DEINIT_ERROR)
 
     if(NOT DEINIT_RESULT EQUAL 0)
-        message(WARNING "Failed to deinit submodule '${IN_SUBMODULE_PATH}' - attempting removal anyway.")
+        message(WARNING "Failed to deinit submodule '${IN_SUBMODULE_PATH}' - attempting removal anyway. Git said: ${DEINIT_ERROR}")
     endif()
 
     execute_process(COMMAND git rm -f -- ${IN_SUBMODULE_PATH}
                     WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
                     RESULT_VARIABLE RM_RESULT
                     OUTPUT_QUIET
-                    ERROR_QUIET)
+                    ERROR_VARIABLE RM_ERROR)
 
     if(NOT RM_RESULT EQUAL 0)
-        message(WARNING "Failed to 'git rm' submodule '${IN_SUBMODULE_PATH}'.")
+
+        # A failed 'git rm' here used to be logged and then silently ignored,
+        # while the function went on to report success anyway. That left the
+        # index entry AND the .gitmodules section for this path in place -
+        # which then makes a FUTURE 'git submodule add' for this exact same
+        # path fail too (git refuses to add a path/section that already
+        # exists), even though the working tree looks empty/gone. Fall back
+        # to stripping the index entry and the .gitmodules section by hand so
+        # the state doesn't stay stuck for the next run.
+        message(WARNING "Failed to 'git rm' submodule '${IN_SUBMODULE_PATH}' - Git said: ${RM_ERROR}. Falling back to a manual index/.gitmodules cleanup.")
+
+        execute_process(COMMAND git rm -f --cached -- ${IN_SUBMODULE_PATH}
+                        WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                        OUTPUT_QUIET
+                        ERROR_QUIET)
+
+        execute_process(COMMAND git config -f .gitmodules --remove-section submodule.${IN_SUBMODULE_PATH}
+                        WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                        OUTPUT_QUIET
+                        ERROR_QUIET)
+
+        execute_process(COMMAND git add .gitmodules
+                        WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                        OUTPUT_QUIET
+                        ERROR_QUIET)
+
     endif()
 
     file(REMOVE_RECURSE "${PROJECT_ROOT_PATH}/.git/modules/${IN_SUBMODULE_PATH}")
+
+    # Always make sure the working tree folder itself is actually gone too -
+    # 'git rm' normally does this, but the manual fallback above only touches
+    # the index/.gitmodules, not the checked-out files.
+    file(REMOVE_RECURSE "${PROJECT_ROOT_PATH}/${IN_SUBMODULE_PATH}")
 
     message(STATUS "Removed stale submodule '${IN_SUBMODULE_PATH}'.")
 
@@ -627,10 +663,15 @@ function(GitHandler_SwitchBranch IN_TARGET_PATH IN_COMMIT_ID)
                     WORKING_DIRECTORY "${IN_TARGET_PATH}"
                     RESULT_VARIABLE FETCH_RESULT
                     OUTPUT_QUIET
-                    ERROR_QUIET)
+                    ERROR_VARIABLE FETCH_ERROR)
 
     if(NOT FETCH_RESULT EQUAL 0)
-        message(WARNING "Failed to fetch commit ${IN_COMMIT_ID} in '${IN_TARGET_PATH}' ")
+        # Note: this working directory itself not being a valid GIT checkout
+        # (e.g. a preceding 'git submodule add' failed and left an empty/
+        # missing folder here) fails at this exact step too, with a generic
+        # "not a git repository" from git - not just a real network/branch
+        # problem. Check the warning right above this one for that case.
+        message(WARNING "Failed to fetch commit ${IN_COMMIT_ID} in '${IN_TARGET_PATH}'. Git said: ${FETCH_ERROR}")
         return()
     endif()
 
@@ -641,10 +682,10 @@ function(GitHandler_SwitchBranch IN_TARGET_PATH IN_COMMIT_ID)
                     WORKING_DIRECTORY "${IN_TARGET_PATH}"
                     RESULT_VARIABLE CHK_RESULT
                     OUTPUT_QUIET
-                    ERROR_QUIET)
+                    ERROR_VARIABLE CHK_ERROR)
 
     if(NOT CHK_RESULT EQUAL 0)
-        message(WARNING "Failed to checkout '${IN_TARGET_PATH}' to fetched ref '${IN_COMMIT_ID}'")
+        message(WARNING "Failed to checkout '${IN_TARGET_PATH}' to fetched ref '${IN_COMMIT_ID}'. Git said: ${CHK_ERROR}")
         return()
     endif()
 

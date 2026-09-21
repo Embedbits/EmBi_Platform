@@ -314,6 +314,17 @@ function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
 
                 GitHandler_SubmoduleInit(${MCAL_SUB_URL} "${MCAL_REL_PATH}/${MCAL_SUB_NAME}" ${MCAL_SUB_ACTIVE} MCAL_SUB_IS_SUBMODULE)
 
+                if(NOT EXISTS "${LOCAL_MCAL_SUB_PATH}/.git")
+                    # GitHandler_SubmoduleInit already warned with the exact
+                    # git error - do not fall through to SwitchBranch on a
+                    # folder that doesn't exist/isn't a real checkout (that
+                    # would just produce a second, misleading "failed to
+                    # fetch" warning), and do not count this peripheral as
+                    # successfully added below.
+                    message(WARNING "Mcal peripheral '${MCAL_SUB_NAME}' could not be checked out - skipping (it will NOT be added to Bsp/Mcal/CMakeLists.txt).")
+                    continue()
+                endif()
+
                 # Ignore submodule changes in parent directory (meaningless for a
                 # plain clone fallback - EmBi platform is not itself a GIT repo)
                 if(MCAL_SUB_IS_SUBMODULE)
@@ -327,6 +338,16 @@ function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
             # branch (never a pinned commit) for each peripheral.
             # --------------------------------------------------
             GitHandler_SwitchBranch(${LOCAL_MCAL_SUB_PATH} ${IN_BRANCH_NAME})
+
+            if(NOT EXISTS "${LOCAL_MCAL_SUB_PATH}/.git")
+                # SwitchBranch already warned with the exact git error. Do not
+                # add a peripheral that isn't actually checked out to
+                # Bsp/Mcal/CMakeLists.txt - a missing add_subdirectory() target
+                # there would otherwise turn this soft warning into a hard
+                # CMake configure error the next time the actual project
+                # (rather than Setup.sh) is configured.
+                continue()
+            endif()
 
             list(APPEND MCAL_ADDED_MODULES "${MCAL_SUB_NAME}")
 
