@@ -10,9 +10,9 @@ menu() {
     clear
     echo "====================================="
     echo "0: Exit"
-    echo "1. Create module"
-    echo "2: Add component"
-    echo "3: Add CMake file"
+    echo "1. Add module"
+    echo "2: Add module component"
+    echo "3: Add module CMake file"
     echo "4: Configuration"
     echo "====================================="
     read -p "Enter your selection (0-4): " choice
@@ -63,24 +63,24 @@ initialization() {
     clear
     echo "====================================="
     echo "0: Back to main menu"
-    echo "1: Initialize project necessary files"
-    echo "2: Initialize STM32CubeIDE project"
-    echo "3: Configure application layer"
-    echo "4: Configure BSP module"
-    echo "5: Update documents module"
-    echo "6: Configure Middleware module"
-    echo "7: Update BSP module (same branch)"
+    echo "1: Project structure initialization"
+    echo "2: STM32CubeIDE project initialization"
+    echo "3: BSP module - Configuration"
+    echo "4: BSP module - Update version"
+    echo "5: Middleware module - Configuration"
+    echo "6: Middleware module - Update version"
+    echo "7: Documents module - Configuration"
     echo "====================================="
     read -p "Enter your selection (0-7): " choice
     case "$choice" in
         0) menu ;;
         1) run_init_project ;;
         2) run_init_cubeide ;;
-        3) run_app_config ;;
-        4) run_bsp_config ;;
-        5) run_docs_init ;;
-        6) run_mw_config ;;
-        7) run_bsp_update ;;
+        3) run_bsp_config ;;
+        4) run_bsp_update ;;
+        5) run_mw_config ;;
+        6) run_mw_update ;;
+        7) run_docs_init ;;
         *)
             echo "Incorrect selection. Try again."
             pause
@@ -92,6 +92,7 @@ initialization() {
 run_init_project() {
     clear
     cmake -P CMake/HelperTools/Prj_Handler/Prj_Handler.cmake
+    cmake -P CMake/HelperTools/App_Handler/App_ModuleHandler.cmake
     pause
     initialization
 }
@@ -100,14 +101,6 @@ run_init_cubeide() {
     clear
     read -p "Enter project name (without spaces): " PROJECT_NAME
     cmake -DPROJECT_NAME="$PROJECT_NAME" -P CMake/HelperTools/Prj_Handler/Prj_CubeIDE_Handler.cmake
-    pause
-    initialization
-}
-
-run_app_config() {
-    clear
-    echo "Running App_ModuleHandler.cmake ..."
-    cmake -P CMake/HelperTools/App_Handler/App_ModuleHandler.cmake
     pause
     initialization
 }
@@ -128,20 +121,31 @@ run_bsp_update() {
     initialization
 }
 
+run_mw_config() {
+    clear
+    cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+    read -p "Enter middleware ID (numerical): " MODULE_ID
+    cmake -DFUNCTION_ID="VERSION_LIST" -DMODULE_ID="$MODULE_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+    read -p "Enter version ID (numerical, 0 = Latest): " VERSION_ID
+    cmake -DFUNCTION_ID="MW_CONFIG" -DMODULE_ID="$MODULE_ID" -DVERSION_ID="$VERSION_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+    pause
+    initialization
+}
+
+run_mw_update() {
+    clear
+    cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+    read -p "Enter middleware ID to update (numerical): " MODULE_ID
+    cmake -DFUNCTION_ID="MW_UPDATE" -DMODULE_ID="$MODULE_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+    pause
+    initialization
+}
+
 run_docs_init() {
     clear
     cmake -DFUNCTION_ID="DOCS_LIST" -P CMake/HelperTools/Bsp_Handler/Bsp_ModuleHandler.cmake
     read -p "Enter branch ID (numerical): " BRANCH_ID
     cmake -DFUNCTION_ID="DOCS_INIT" -DBRANCH_ID="$BRANCH_ID" -P CMake/HelperTools/Bsp_Handler/Bsp_ModuleHandler.cmake
-    pause
-    initialization
-}
-
-run_mw_config() {
-    clear
-    cmake -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
-    read -p "Enter component ID (numerical): " COMPONENT_ID
-    cmake -DMODULE_ID="$COMPONENT_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
     pause
     initialization
 }

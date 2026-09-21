@@ -39,6 +39,14 @@ SysConfig_Get_BspRepoURL(BSP_BSP_REPO_URL)
 # Read project root folder path
 SysConfig_Get_ProjectRootPath(PROJECT_ROOT_PATH)
 
+# Directory this file lives in, captured at include-time - unlike
+# CMAKE_CURRENT_LIST_DIR read directly inside the function body below, this
+# stays correct even when ModuleInit() is called from a DIFFERENT file that
+# included this one (e.g. Mw_ModuleHandler.cmake reusing this generator for
+# its own middleware handler folders) - CMAKE_CURRENT_LIST_DIR at call time
+# reflects the CALLER's file, not the file the function was defined in.
+set(MODULE_INIT_TEMPLATE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+
 #------------------------------------------------------------------------------#
 # Generation of folder structure and necessary files.
 #
@@ -69,6 +77,20 @@ function(ModuleInit MODULE_PATH_ARG MODULE_NAME_ARG)
     
     set(MODULE_NAME "${MODULE_NAME_ARG}")
 
+    # The remaining placeholders used by Template.c.in / Template.h.in
+    # (FILE_NAME, COMPONENT_NAME, FUNCTION_PREFIX, MACRO_MODULE_NAME,
+    # MACRO_COMPONENT_NAME) exist to let those same two templates also
+    # serve ModuleComponentInit's per-component files. For a top-level
+    # module (this function) there is no separate component, so the
+    # module itself fills the "component" role - matching how
+    # Template_Port.h.in / Template_Types.h.in already double up
+    # MACRO_NAME for their own include guards (e.g. FREERTOS_FREERTOS_PORT_H).
+    set(FILE_NAME "${MODULE_NAME_ARG}")
+    set(COMPONENT_NAME "${MODULE_NAME_ARG}")
+    set(FUNCTION_PREFIX "${MODULE_NAME_ARG}")
+    set(MACRO_MODULE_NAME "${MACRO_NAME}")
+    set(MACRO_COMPONENT_NAME "${MACRO_NAME}")
+
     # Read author name from git global configuration
     execute_process(COMMAND git config --global user.name
                     OUTPUT_VARIABLE AUTHOR
@@ -77,7 +99,7 @@ function(ModuleInit MODULE_PATH_ARG MODULE_NAME_ARG)
     if(EXISTS "${PROJECT_ROOT_PATH}/${MODULE_PATH_ARG}/${MODULE_NAME_ARG}/${MODULE_NAME_ARG}.c")
         message(STATUS "${MODULE_NAME_ARG}.c file already exist in the source directory.")
     else()
-        configure_file("${CMAKE_CURRENT_LIST_DIR}/Template.c.in"
+        configure_file("${MODULE_INIT_TEMPLATE_DIR}/Template.c.in"
                        "${PROJECT_ROOT_PATH}/${MODULE_PATH_ARG}/${MODULE_NAME_ARG}/${MODULE_NAME_ARG}.c"
                        @ONLY)
     endif()
@@ -85,7 +107,7 @@ function(ModuleInit MODULE_PATH_ARG MODULE_NAME_ARG)
     if(EXISTS "${PROJECT_ROOT_PATH}/${MODULE_PATH_ARG}/${MODULE_NAME_ARG}/${MODULE_NAME_ARG}.h")
         message(STATUS "${MODULE_NAME_ARG}.h file already exist in the source directory.")
     else()
-        configure_file("${CMAKE_CURRENT_LIST_DIR}/Template.h.in"
+        configure_file("${MODULE_INIT_TEMPLATE_DIR}/Template.h.in"
                        "${PROJECT_ROOT_PATH}/${MODULE_PATH_ARG}/${MODULE_NAME_ARG}/${MODULE_NAME_ARG}.h"
                        @ONLY)
     endif()
@@ -93,7 +115,7 @@ function(ModuleInit MODULE_PATH_ARG MODULE_NAME_ARG)
     if(EXISTS "${PROJECT_ROOT_PATH}/${MODULE_PATH_ARG}/${MODULE_NAME_ARG}/${MODULE_NAME_ARG}_Port.h")
         message(STATUS "${MODULE_NAME_ARG}_Port.h file already exist in the source directory.")
     else()
-        configure_file("${CMAKE_CURRENT_LIST_DIR}/Template_Port.h.in"
+        configure_file("${MODULE_INIT_TEMPLATE_DIR}/Template_Port.h.in"
                        "${PROJECT_ROOT_PATH}/${MODULE_PATH_ARG}/${MODULE_NAME_ARG}/${MODULE_NAME_ARG}_Port.h"
                        @ONLY)
     endif()
@@ -101,7 +123,7 @@ function(ModuleInit MODULE_PATH_ARG MODULE_NAME_ARG)
     if(EXISTS "${PROJECT_ROOT_PATH}/${MODULE_PATH_ARG}/${MODULE_NAME_ARG}/${MODULE_NAME_ARG}_Types.h")
         message(STATUS "${MODULE_NAME_ARG}_Types.h file already exist in the source directory.")
     else()
-        configure_file("${CMAKE_CURRENT_LIST_DIR}/Template_Types.h.in"
+        configure_file("${MODULE_INIT_TEMPLATE_DIR}/Template_Types.h.in"
                        "${PROJECT_ROOT_PATH}/${MODULE_PATH_ARG}/${MODULE_NAME_ARG}/${MODULE_NAME_ARG}_Types.h"
                        @ONLY)
     endif()
@@ -140,4 +162,4 @@ if(CMAKE_SCRIPT_MODE_FILE AND
     ModuleInit(${MODULE_INIT_MODULE_PATH} 
                ${MODULE_INIT_MODULE_NAME})
     
-endif()
+endif()

@@ -13,6 +13,9 @@
 #   - Adding a new GIT submodule at a given path.
 #   - Listing a repository's remote branches, and checking whether a specific
 #     branch exists on a remote (without requiring a local clone).
+#   - Listing a repository's tags, and resolving its default branch, directly
+#     from its URL (without requiring a local clone) - used to discover a
+#     middleware component's own available versions (see Mw_ModuleHandler.cmake).
 #   - Switching a repository (or submodule) to a given branch/commit, doing a
 #     hard reset + clean, and recursively updating any nested submodules.
 #   - Configuring how a submodule's local modifications are reported by its
@@ -814,6 +817,81 @@ function(GitHandler_FetchAndTrackBranch IN_TARGET_PATH IN_BRANCH_NAME)
     if(NOT FETCH_RESULT EQUAL 0)
         message(WARNING "Failed to fetch branch '${IN_BRANCH_NAME}' in '${IN_TARGET_PATH}'")
     endif()
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: GitHandler_ListRemoteTags
+# Description: Lists a repository's tags directly from its URL, WITHOUT
+#              cloning it (a plain `git ls-remote --tags --refs`, the same
+#              "no clone needed" approach as GitHandler_ListRemoteBranches).
+#              `--refs` excludes the dereferenced "^{}" peeled entries an
+#              annotated tag would otherwise also produce.
+#
+#              Used to discover the available VERSIONS of a middleware
+#              component (see Mw_ModuleHandler.cmake) - each middleware
+#              component versions its own releases via GIT tags on its own
+#              repository (the Middlewares catalog repository itself is
+#              never version-pinned).
+#
+# IN_REPO_URL  [in]: GIT repository URL to query.
+# OUT_TAG_LIST [out]: List of remote tag names, in whatever order
+#                      `git ls-remote` reported them - NOT sorted. Callers
+#                      that need them in semantic-version order must sort
+#                      the result themselves, e.g.
+#                      `list(SORT OUT_TAG_LIST COMPARE NATURAL)`.
+# ------------------------------------------------------------------------------
+function(GitHandler_ListRemoteTags IN_REPO_URL OUT_TAG_LIST)
+
+    execute_process(COMMAND git ls-remote --tags --refs ${IN_REPO_URL}
+                    OUTPUT_VARIABLE TAG_LIST
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+
+    # Filter tag list
+    string(REGEX MATCHALL "refs/tags/[^\n\r]+" GIT_TAGS "${TAG_LIST}")
+    string(REPLACE "refs/tags/" "" TAG_LIST "${GIT_TAGS}")
+
+    # Format to list
+    string(REPLACE "\n" ";" TAG_LIST "${TAG_LIST}")
+    list(REMOVE_DUPLICATES TAG_LIST)
+
+    set(${OUT_TAG_LIST} ${TAG_LIST} PARENT_SCOPE)
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: GitHandler_GetDefaultBranch
+# Description: Resolves a repository's default branch (the one its remote
+#              HEAD points at, e.g. "main"/"master") directly from its URL,
+#              WITHOUT cloning it (`git ls-remote --symref <url> HEAD`).
+#
+#              Used as a fallback "latest version" for a middleware
+#              component that does not (yet) have any GIT tags - see
+#              Mw_ModuleHandler.cmake.
+#
+# IN_REPO_URL [in]: GIT repository URL to query.
+# OUT_BRANCH [out]: Default branch name, or an empty string if it could not
+#                    be resolved.
+# ------------------------------------------------------------------------------
+function(GitHandler_GetDefaultBranch IN_REPO_URL OUT_BRANCH)
+
+    execute_process(COMMAND git ls-remote --symref ${IN_REPO_URL} HEAD
+                    OUTPUT_VARIABLE SYMREF_OUTPUT
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+
+    string(REGEX MATCH "ref:[ \t]*refs/heads/([^ \t\r\n]+)" _ "${SYMREF_OUTPUT}")
+
+    if(NOT CMAKE_MATCH_1)
+        message(DEBUG "Could not resolve default branch for '${IN_REPO_URL}'")
+        set(${OUT_BRANCH} "" PARENT_SCOPE)
+        return()
+    endif()
+
+    set(${OUT_BRANCH} "${CMAKE_MATCH_1}" PARENT_SCOPE)
 
 endfunction()
 

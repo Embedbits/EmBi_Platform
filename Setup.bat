@@ -7,9 +7,9 @@ setlocal enabledelayedexpansion
 cls
 echo =====================================
 echo 0: Exit
-echo 1. Create module           
-echo 2: Add component     
-echo 3: Add CMake file
+echo 1. Add module
+echo 2: Add module component
+echo 3: Add module CMake file
 echo 4: Configuration
 echo =====================================
 set /p choice=Enter your selection (0-4):
@@ -61,24 +61,24 @@ goto MENU
 cls
 echo =====================================
 echo 0: Back to main menu
-echo 1: Initialize project necessary files
+echo 1: Project structure initialization
 echo 2: Initialize STM32CubeIDE project
-echo 3: Configure application layer
-echo 4: Configure BSP module
-echo 5: Update documents module
-echo 6: Configure Middleware module
-echo 7: Update BSP module (same branch)
+echo 3: BSP module - Configuration
+echo 4: BSP module - Update version
+echo 5: Middleware module - Configuration
+echo 6: Middleware module - Update version
+echo 7: Documents module - Configuration
 echo =====================================
 set /p choice=Enter your selection (0-7):
 
 if "%choice%"=="0" goto MENU
 if "%choice%"=="1" goto RUN_INIT_PROJECT
 if "%choice%"=="2" goto RUN_INIT_CUBEIDE
-if "%choice%"=="3" goto RUN_APP_CONFIG
-if "%choice%"=="4" goto RUN_BSP_CONFIG
-if "%choice%"=="5" goto RUN_DOCS_INIT
-if "%choice%"=="6" goto RUN_MW_CONFIG
-if "%choice%"=="7" goto RUN_BSP_UPDATE
+if "%choice%"=="3" goto RUN_BSP_CONFIG
+if "%choice%"=="4" goto RUN_BSP_UPDATE
+if "%choice%"=="5" goto RUN_MW_CONFIG
+if "%choice%"=="6" goto RUN_MW_UPDATE
+if "%choice%"=="7" goto RUN_DOCS_INIT
 
 echo Incorrect selection. Try again.
 pause
@@ -88,6 +88,7 @@ goto MENU
 :RUN_INIT_PROJECT
 cls
 cmake -P CMake/HelperTools/Prj_Handler/Prj_Handler.cmake
+cmake -P CMake/HelperTools/App_Handler/App_ModuleHandler.cmake
 pause
 goto INITIALIZATION
 
@@ -96,14 +97,6 @@ goto INITIALIZATION
 cls
 set /p PROJECT_NAME=Enter project name (without spaces):
 cmake -DPROJECT_NAME=%PROJECT_NAME% -P CMake/HelperTools/Prj_Handler/Prj_CubeIDE_Handler.cmake
-pause
-goto INITIALIZATION
-
-
-:RUN_APP_CONFIG
-cls
-echo Running App_ModuleHandler.cmake ...
-cmake -P CMake/HelperTools/App_Handler/App_ModuleHandler.cmake
 pause
 goto INITIALIZATION
 
@@ -130,20 +123,31 @@ pause
 goto INITIALIZATION
 
 
+:RUN_MW_CONFIG
+cls
+cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+set /p MODULE_ID=Enter middleware ID (numerical):
+cmake -DFUNCTION_ID="VERSION_LIST" -DMODULE_ID=%MODULE_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+set /p VERSION_ID=Enter version ID (numerical, 0 = Latest):
+cmake -DFUNCTION_ID="MW_CONFIG" -DMODULE_ID=%MODULE_ID% -DVERSION_ID=%VERSION_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+pause
+goto INITIALIZATION
+
+
+:RUN_MW_UPDATE
+cls
+cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+set /p MODULE_ID=Enter middleware ID to update (numerical):
+cmake -DFUNCTION_ID="MW_UPDATE" -DMODULE_ID=%MODULE_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+pause
+goto INITIALIZATION
+
+
 :RUN_DOCS_INIT
 cls
 cmake -DFUNCTION_ID="DOCS_LIST" -P CMake/HelperTools/Bsp_Handler/Bsp_ModuleHandler.cmake
 set /p BRANCH_ID=Enter branch ID (numerical):
 cmake -DFUNCTION_ID="DOCS_INIT" -DBRANCH_ID=%BRANCH_ID% -P CMake/HelperTools/Bsp_Handler/Bsp_ModuleHandler.cmake
-pause
-goto INITIALIZATION
-
-
-:RUN_MW_CONFIG
-cls
-cmake -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
-set /p COMPONENT_ID=Enter component ID (numerical):
-cmake -DMODULE_ID=%COMPONENT_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
 pause
 goto INITIALIZATION
 

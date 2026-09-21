@@ -111,7 +111,35 @@ This option refreshes the local copy of the Docs module content used by the proj
 
 #### Option: `Configure Middleware module`
 
-This option will show available middleware modules. After selection, the chosen module is added into the project's `Middlewares` folder as a Git submodule.
+> **Run this once per middleware component you want to use, and again any time you want to switch that component to a different version.**
+
+The script first **lists all available middleware components** declared in the Middlewares catalog repository, then, once one is selected, **lists all available versions** (Git tags) of that component's own repository.
+
+Example output:
+```
+[0]: Return back
+[1]: FreeRTOS
+[2]: u8g2
+Enter middleware ID (numerical):
+```
+```
+Available versions for 'FreeRTOS':
+[0]: Latest (V10.4.3)
+[1]: V10.3.1
+[2]: V10.4.3
+Enter version ID (numerical, 0 = Latest):
+```
+
+After both are selected, the setup script:
+- Adds the component as a **Git submodule** under `Middlewares/ThirdParty/<Name>`, checked out at the selected version.
+- Scaffolds a project-side handler folder `Middlewares/<Name>` the **first time only** — this is where your own glue/port code and configuration for the component goes; it is never overwritten by a later re-configuration.
+- Wires both folders into `Middlewares/Middlewares.cmake` via `add_subdirectory()` (the `ThirdParty/<Name>` one only if that vendored folder ships its own `CMakeLists.txt`).
+
+Re-running this option for an already-added component with a different version ID switches that component's `Middlewares/ThirdParty/<Name>` checkout to the newly selected version, without touching your handler folder.
+
+#### Option: `Update Middleware module`
+
+Updates a single, already-added middleware component to its **latest available version** — its newest Git tag, or the latest commit of its default branch if it has no tags yet. The same middleware list as above is shown first, so you can pick which component to update.
 
 #### Option: `Update EmBi_Platform`
 
@@ -169,10 +197,15 @@ Project_root/
 │   ├── Ral                       Register Abstraction Layer
 │   └── Startup                   Startup handler
 │
-├── Middlewares                   Middlewares module (added per-module as Git submodules)
-│   ├── ModBus                    Modbus protocol middleware
-│   ├── Log                       Logging middleware
-│   └── ...
+├── Middlewares                   Middlewares module
+│   ├── ThirdParty                Vendored middleware sources (added per-component as Git submodules)
+│   │   ├── FreeRTOS              FreeRTOS sources, checked out at the selected version
+│   │   ├── u8g2                  u8g2 sources, checked out at the selected version
+│   │   └── ...
+│   ├── FreeRTOS                  Project-side FreeRTOS handler (port layer, configuration)
+│   ├── u8g2                      Project-side u8g2 handler (port layer, configuration)
+│   ├── ...
+│   └── Middlewares.cmake         Middlewares root CMake file
 │
 ├── EmBi_Platform                 Platform root folder (this module, added as a submodule)
 │   ├── CMake                     CMake build functionality

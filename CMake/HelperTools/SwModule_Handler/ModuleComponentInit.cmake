@@ -64,6 +64,12 @@ function(ModuleComponentInit MODULE_PATH_ARG MODULE_NAME_ARG COMPONENT_NAME_ARG)
     set(COMPONENT_NAME "${COMPONENT_NAME_ARG}")
     
     set(FILE_NAME "${MODULE_NAME_ARG}_${COMPONENT_NAME_ARG}")
+
+    # Template.c.in also references @MACRO_NAME@ (module-level version-macro
+    # prefix, e.g. FREERTOS_MAJOR_VERSION) which was never set here, leaving
+    # those macro names blank in generated component .c files - reuse the
+    # already-combined module+component macro prefix for it.
+    set(MACRO_NAME "${MACRO_MODULE_NAME}")
     
     set(FUNCTION_PREFIX "${MODULE_NAME_ARG}_${COMPONENT_NAME_ARG}")
     
