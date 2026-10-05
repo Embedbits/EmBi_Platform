@@ -46,7 +46,7 @@
             "name": "UnitTest",
             "hidden": true,
             "displayName": "Unit tests",
-            "description": "Host based unit tests (Unity + CMock). Host tools replace the artifacts list of project ArtifactsConfig.txt (no ARM toolchain), gcc and ruby artifacts exist for Windows only (system gcc / ruby on Linux / macOS)",
+            "description": "Host based unit tests (Unity + CMock). Host tools replace the artifacts list of project ArtifactsConfig.txt (no ARM toolchain), gcc artifact exists for Windows and Linux (system gcc on macOS)",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "UnitTest",
                 "ARTIFACTS_HANDLER_REQ_LIST": "ninja;1.12.0;latest,gcc;15.2.0;latest,ruby;latest;latest,unity;latest;latest,cmock;latest;latest"

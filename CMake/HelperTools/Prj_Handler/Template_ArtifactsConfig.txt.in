@@ -7,6 +7,7 @@
 
 ninja;1.12.0;latest
 gcc-arm-none-eabi;latest;latest
-doxygen;latest;latest
+doxygen;1.17.0;latest
+graphviz;latest;latest
 ARTIFACTS_HANDLER_CACHE_PATH=C:\ArtifactsCache
 ARTIFACTS_HANDLER_ROOT_REPO_URL=https://github.com/Embedbits/Artifacts.git

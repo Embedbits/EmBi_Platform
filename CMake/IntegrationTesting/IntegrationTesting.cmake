@@ -1,8 +1,8 @@
 ################################################################################
 # Author: Mr.Nobody
 # file:  IntegrationTesting.cmake
-# brief: Integration testing on target (Nucleo boards) - Unity on MCU, results
-#        read by debug probe.
+# brief: Integration testing on target (boards) - Unity on MCU, results read
+#        by debug probe (probe-rs).
 #
 # Included by Build.cmake when CMAKE_BUILD_TYPE is "IntegrationTest". Modules
 # are built for MCU exactly as in firmware build, every registered test creates
@@ -18,41 +18,49 @@
 #
 # Every test case runs after system reset of the MCU (one test case per boot).
 # Unity output is stored in RAM mailbox (section .noinit, kept over reset), host
-# script IntegrationTesting_Run.cmake finds the board, flashes the firmware by
-# STM32_Programmer_CLI, waits for the end of the tests and reads the output over
-# SWD. No peripheral (USART, pins) is used for results. Faults and blocked test
-# cases are reported as failures and the execution continues by the next test.
+# script IntegrationTesting_Run.cmake selects the probe, checks the MCU, flashes
+# the firmware by probe-rs, waits for the end of the tests and reads the output
+# over the debug port. No peripheral (USART, pins) is used for results. Faults
+# and blocked test cases are reported as failures and the execution continues
+# by the next test. The host knows no MCU, board or probe vendor - all target
+# data are parameters (or the boards file of the project).
 #
 # Required tools (parameter or environment variable):
 #   UNITY_ROOT            - Unity root folder (src/unity.c), artifact "unity"
-#   STM32_PROGRAMMER_CLI  - STM32CubeProgrammer CLI, searched in default
-#                           installation folders and in PATH (probe search by
-#                           board name, MCU check)
-#   PROBE_RS_EXECUTABLE   - probe-rs, artifact "probe-rs" (download, mailbox
-#                           access, reset). STM32CubeProgrammer clears NVIC
-#                           interrupt enable registers on every connection
-#                           (EmBi_Platform AB#342), probe-rs keeps them.
+#   PROBE_RS_EXECUTABLE   - probe-rs, artifact "probe-rs" (probe search, MCU
+#                           check, download, mailbox access, reset)
 #
 # Optional parameters:
 #   INTEGRATION_TEST_BOARD        - Board name (eg. NUCLEO_H503RB), compile definition
 #                                   IT_BOARD_<name> selects board dependent pins in tests.
-#                                   The probe of the board is found by "Board Name"
-#                                   reported by ST-LINK (NUCLEO-H503RB).
-#   INTEGRATION_TEST_PROBE        - Probe connection arguments of STM32_Programmer_CLI
-#                                   (default "port=SWD"). With "sn=..." the probe is
-#                                   used directly (no search by board name). Environment
-#                                   variable INTEGRATION_TEST_PROBE_SN selects the probe
-#                                   when the tests are executed (more equal boards).
+#                                   Parameters of the board are taken from the boards file.
+#   INTEGRATION_TEST_BOARDS_FILE  - Boards file (default Build/IntegrationTestBoards.json -
+#                                   connected boards written by IntegrationTesting_Detect.cmake
+#                                   from the optional IntegrationTestBoards.json of the project):
+#                                   preset, probes and parameters (below) of every board, used
+#                                   for parameters which are not set.
+#   INTEGRATION_TEST_PROBE        - Probes of the board - probe-rs selectors (VID:PID[:SN])
+#                                   or serial numbers (list). Empty: probes of the board in the
+#                                   boards file, all connected probes without it.
+#                                   Environment variable INTEGRATION_TEST_PROBE_SN selects
+#                                   the probe when the tests are executed (more equal boards).
+#   INTEGRATION_TEST_PROBE_RS_CHIP - probe-rs chip name (default: TARGET_MCU if probe-rs
+#                                   knows it)
+#   INTEGRATION_TEST_MCU_PRESETS_FILE - Ral presets with MCU identification (default
+#                                   Bsp/Ral/RalPresets.json) - ID and flash size registers of
+#                                   TARGET_MCU, used for the parameters below which are not set.
+#   INTEGRATION_TEST_ID_ADDRESS   - Address of the ID register of the MCU.
+#   INTEGRATION_TEST_ID_MASK      - Mask of the ID bits (default 0xFFFFFFFF)
+#   INTEGRATION_TEST_ID_VALUE     - Expected ID - the host checks the MCU of the board before
+#                                   download and selects the probe of matching MCU when more
+#                                   probes are connected. Empty address: MCU is not checked.
+#   INTEGRATION_TEST_FLASH_SIZE_ADDRESS - Address of the 16-bit flash size register [KB]
+#   INTEGRATION_TEST_FLASH_SIZE_KB - Expected flash size - checked together with the ID.
 #   INTEGRATION_TEST_OUTPUT_SIZE  - Size of output buffer in bytes (default 4096)
 #   INTEGRATION_TEST_TIMEOUT      - Default timeout of test firmware execution [s]
 #   INTEGRATION_TEST_CASE_TIMEOUT - Default timeout of one test case [s], blocked test
 #                                   case is aborted by host (reset of MCU)
 #   INTEGRATION_TEST_RUN_KNOWN_DEFECTS - Execute tests marked by IT_KNOWN_DEFECT
-#   INTEGRATION_TEST_DEBUG_TOOL   - Tool of target access during the test: PROBE_RS
-#                                   (default if probe-rs is available) or CUBE
-#                                   (STM32_Programmer_CLI only)
-#   INTEGRATION_TEST_PROBE_RS_CHIP - probe-rs chip name (default derived from board:
-#                                   NUCLEO_H503RB -> STM32H503RB)
 #
 # Registration in module CMakeLists.txt (same principle as unit tests):
 #   if(INTEGRATION_TESTING_AVAILABLE STREQUAL "ON")
@@ -81,11 +89,35 @@ include_guard(GLOBAL)
 
 set(INTEGRATION_TESTING_DIR             "${CMAKE_CURRENT_LIST_DIR}")
 
-set(INTEGRATION_TEST_PROBE              "port=SWD"
-    CACHE STRING                        "STM32_Programmer_CLI connection arguments of the probe")
-
 set(INTEGRATION_TEST_BOARD              ""
     CACHE STRING                        "Board used for integration tests (eg. NUCLEO_H503RB)")
+
+set(INTEGRATION_TEST_BOARDS_FILE        "${CMAKE_SOURCE_DIR}/Build/IntegrationTestBoards.json"
+    CACHE FILEPATH                      "Connected boards (IntegrationTesting_Detect.cmake) - preset, probes and parameters of every board")
+
+set(INTEGRATION_TEST_MCU_PRESETS_FILE   "${CMAKE_SOURCE_DIR}/Bsp/Ral/RalPresets.json"
+    CACHE FILEPATH                      "Ral presets with MCU identification (ID and flash size registers)")
+
+set(INTEGRATION_TEST_PROBE              ""
+    CACHE STRING                        "Probes of the board - probe-rs selectors VID:PID[:SN] or serial numbers (empty = all)")
+
+set(INTEGRATION_TEST_PROBE_RS_CHIP      ""
+    CACHE STRING                        "probe-rs chip name of the MCU (empty = TARGET_MCU if probe-rs knows it)")
+
+set(INTEGRATION_TEST_ID_ADDRESS         ""
+    CACHE STRING                        "Address of the MCU ID register (empty = MCU is not checked)")
+
+set(INTEGRATION_TEST_ID_MASK            ""
+    CACHE STRING                        "Mask of the MCU ID bits (empty = 0xFFFFFFFF)")
+
+set(INTEGRATION_TEST_ID_VALUE           ""
+    CACHE STRING                        "Expected MCU ID (after mask)")
+
+set(INTEGRATION_TEST_FLASH_SIZE_ADDRESS ""
+    CACHE STRING                        "Address of the 16-bit flash size register [KB] (empty = flash size is not checked)")
+
+set(INTEGRATION_TEST_FLASH_SIZE_KB      ""
+    CACHE STRING                        "Expected flash size of the MCU [KB]")
 
 set(INTEGRATION_TEST_OUTPUT_SIZE        "4096"
     CACHE STRING                        "Size of Unity output buffer in RAM [B]")
@@ -115,87 +147,160 @@ endif()
 
 set(UNITY_ROOT "${UNITY_ROOT}" CACHE PATH "Unity root folder" FORCE)
 
-if(NOT STM32_PROGRAMMER_CLI AND DEFINED ENV{STM32_PROGRAMMER_CLI})
-    set(STM32_PROGRAMMER_CLI "$ENV{STM32_PROGRAMMER_CLI}" CACHE FILEPATH "STM32CubeProgrammer CLI" FORCE)
-endif()
-
-find_program(STM32_PROGRAMMER_CLI
-    NAMES STM32_Programmer_CLI
-    PATHS "C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin"
-          "C:/Program Files/ST/STM32Cube/STM32CubeProgrammer/bin"
-          "$ENV{HOME}/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin"
-          "/opt/st/stm32cubeprogrammer/bin"
-)
-
-if(NOT STM32_PROGRAMMER_CLI)
-    message(WARNING "STM32_Programmer_CLI not found. Test firmware is built, but tests cannot be executed. "
-                    "Pass -DSTM32_PROGRAMMER_CLI=<path>.")
-endif()
-
-#=========================== Board identification =============================#
-
-# ST-LINK reports board name with dash (NUCLEO-H503RB), CMake name uses underscore
-string(REPLACE "_" "-" INTEGRATION_TEST_BOARD_NAME "${INTEGRATION_TEST_BOARD}")
-
-#=========================== Target access tool ===============================#
-
 if(NOT PROBE_RS_EXECUTABLE)
     find_program(PROBE_RS_EXECUTABLE NAMES probe-rs)
 endif()
 
-if(PROBE_RS_EXECUTABLE)
-    set(IT_DEFAULT_DEBUG_TOOL "PROBE_RS")
-else()
-    set(IT_DEFAULT_DEBUG_TOOL "CUBE")
+if(NOT PROBE_RS_EXECUTABLE)
+    message(WARNING "probe-rs not found. Test firmware is built, but tests cannot be executed. "
+                    "Add the artifact 'probe-rs' or pass -DPROBE_RS_EXECUTABLE=<path>.")
 endif()
 
-set(INTEGRATION_TEST_DEBUG_TOOL         "${IT_DEFAULT_DEBUG_TOOL}"
-    CACHE STRING                        "Tool of target access during integration tests (PROBE_RS / CUBE)")
-set_property(CACHE INTEGRATION_TEST_DEBUG_TOOL PROPERTY STRINGS PROBE_RS CUBE)
+#============================ Board parameters ================================#
 
-# probe-rs chip name - MCU of the Nucleo board (NUCLEO-H503RB -> STM32H503RB)
-string(REGEX REPLACE "^NUCLEO-" "STM32" IT_DEFAULT_PROBE_RS_CHIP "${INTEGRATION_TEST_BOARD_NAME}")
+# Parameters of the board from the boards file - used for parameters which are
+# not set (command line, preset and cache have priority):
+#   { "boards": { "<INTEGRATION_TEST_BOARD>": { "preset": "<configure preset>",
+#                 "probes": [ "<VID:PID:SN>", ... ],
+#                 "cacheVariables": { "INTEGRATION_TEST_...": "<value>", ... } } } }
+if(INTEGRATION_TEST_BOARD AND EXISTS "${INTEGRATION_TEST_BOARDS_FILE}")
 
-set(INTEGRATION_TEST_PROBE_RS_CHIP      "${IT_DEFAULT_PROBE_RS_CHIP}"
-    CACHE STRING                        "probe-rs chip name of the board MCU (eg. STM32H503RB)")
+    file(READ "${INTEGRATION_TEST_BOARDS_FILE}" IT_BOARDS_CONTENT)
 
-set(IT_PROBE_RS_ARG "")
+    string(JSON IT_BOARD_CONFIG ERROR_VARIABLE IT_BOARD_ERROR GET "${IT_BOARDS_CONTENT}" boards ${INTEGRATION_TEST_BOARD})
 
-if(INTEGRATION_TEST_DEBUG_TOOL STREQUAL "PROBE_RS")
-    if(NOT PROBE_RS_EXECUTABLE)
-        message(WARNING "INTEGRATION_TEST_DEBUG_TOOL is PROBE_RS, but probe-rs was not found. "
-                        "Add artifact 'probe-rs' or pass -DPROBE_RS_EXECUTABLE=<path>.")
-    elseif(NOT INTEGRATION_TEST_PROBE_RS_CHIP)
-        message(WARNING "probe-rs chip is not known (INTEGRATION_TEST_BOARD is not set). "
-                        "Pass -DINTEGRATION_TEST_PROBE_RS_CHIP=<chip>.")
+    if(IT_BOARD_ERROR)
+        message(STATUS "Board ${INTEGRATION_TEST_BOARD} is not defined in ${INTEGRATION_TEST_BOARDS_FILE}.")
     else()
-        set(IT_PROBE_RS_ARG "${PROBE_RS_EXECUTABLE}")
+        string(JSON IT_PROBES_CNT ERROR_VARIABLE IT_PROBES_ERROR LENGTH "${IT_BOARD_CONFIG}" probes)
+
+        if(NOT INTEGRATION_TEST_PROBE AND NOT IT_PROBES_ERROR AND IT_PROBES_CNT GREATER 0)
+            math(EXPR IT_PROBES_LAST "${IT_PROBES_CNT} - 1")
+
+            foreach(IT_PROBE_IDX RANGE ${IT_PROBES_LAST})
+                string(JSON IT_BOARD_PROBE GET "${IT_BOARD_CONFIG}" probes ${IT_PROBE_IDX})
+                list(APPEND INTEGRATION_TEST_PROBE "${IT_BOARD_PROBE}")
+            endforeach()
+        endif()
+
+        string(JSON IT_VARS_CNT ERROR_VARIABLE IT_VARS_ERROR LENGTH "${IT_BOARD_CONFIG}" cacheVariables)
+
+        if(NOT IT_VARS_ERROR AND IT_VARS_CNT GREATER 0)
+            math(EXPR IT_VARS_LAST "${IT_VARS_CNT} - 1")
+
+            foreach(IT_VAR_IDX RANGE ${IT_VARS_LAST})
+                string(JSON IT_VAR_NAME  MEMBER "${IT_BOARD_CONFIG}" cacheVariables ${IT_VAR_IDX})
+                string(JSON IT_VAR_VALUE GET    "${IT_BOARD_CONFIG}" cacheVariables ${IT_VAR_NAME})
+
+                if("${${IT_VAR_NAME}}" STREQUAL "")
+                    set(${IT_VAR_NAME} "${IT_VAR_VALUE}")
+                endif()
+            endforeach()
+        endif()
     endif()
+
 endif()
 
-# Device ID of the MCU (DBGMCU_IDCODE DEV_ID, reported by STM32_Programmer_CLI).
-# Host checks it before download - firmware is built for this MCU only.
-string(REGEX MATCH "^STM32([A-Z][0-9A-Z][0-9A-Z][0-9A-Z])" _ "${TARGET_MCU}")
-set(IT_MCU_LINE "${CMAKE_MATCH_1}")
+# MCU identification of the target MCU preset (TARGET_MCU_FULL_NAME, eg.
+# STM32F407xG) from the Ral presets (vendor data "identification",
+# IntegrationTesting_Probe.cmake) - used for parameters which are not set
+set(IT_IDENTIFICATION_DEVICE "")
 
-set(INTEGRATION_TEST_DEVICE_ID "")
+if(TARGET_MCU_FULL_NAME)
 
-if(IT_MCU_LINE STREQUAL "H503")
-    set(INTEGRATION_TEST_DEVICE_ID "0x474")
-elseif(IT_MCU_LINE MATCHES "^H5[23]3$")
-    set(INTEGRATION_TEST_DEVICE_ID "0x478")
-elseif(IT_MCU_LINE MATCHES "^H56[23]$" OR IT_MCU_LINE STREQUAL "H573")
-    set(INTEGRATION_TEST_DEVICE_ID "0x484")
-else()
-    message(STATUS "Device ID of ${TARGET_MCU} is not known - MCU on the board is not checked.")
+    include("${INTEGRATION_TESTING_DIR}/IntegrationTesting_Probe.cmake")
+
+    IntegrationTesting_ReadMcuIdentification(IT_IDENTIFIED_MCUS "${INTEGRATION_TEST_MCU_PRESETS_FILE}")
+
+    if("${TARGET_MCU_FULL_NAME}" IN_LIST IT_IDENTIFIED_MCUS)
+        set(IT_MCU "${TARGET_MCU_FULL_NAME}")
+        set(IT_IDENTIFICATION_DEVICE "${IT_MCU_${IT_MCU}_DEVICE}")
+
+        if(NOT INTEGRATION_TEST_ID_ADDRESS)
+            set(INTEGRATION_TEST_ID_ADDRESS "${IT_MCU_${IT_MCU}_ID_ADDRESS}")
+            set(INTEGRATION_TEST_ID_MASK    "${IT_MCU_${IT_MCU}_ID_MASK}")
+            set(INTEGRATION_TEST_ID_VALUE   "${IT_MCU_${IT_MCU}_ID_VALUE}")
+        endif()
+
+        if(NOT INTEGRATION_TEST_FLASH_SIZE_ADDRESS)
+            set(INTEGRATION_TEST_FLASH_SIZE_ADDRESS "${IT_MCU_${IT_MCU}_FLASH_SIZE_ADDRESS}")
+            set(INTEGRATION_TEST_FLASH_SIZE_KB      "${IT_MCU_${IT_MCU}_FLASH_SIZE_KB}")
+        endif()
+    else()
+        message(STATUS "No MCU identification of ${TARGET_MCU_FULL_NAME} in ${INTEGRATION_TEST_MCU_PRESETS_FILE}.")
+    endif()
+
 endif()
+
+# probe-rs chip - device of the MCU identification or TARGET_MCU, the first one
+# probe-rs knows ("probe-rs chip info"); naming of MCUs is not interpreted (the
+# board defines its chip otherwise)
+if(NOT INTEGRATION_TEST_PROBE_RS_CHIP AND PROBE_RS_EXECUTABLE)
+
+    foreach(IT_CHIP_CANDIDATE IN ITEMS "${IT_IDENTIFICATION_DEVICE}" "${TARGET_MCU_FULL_NAME}")
+
+        if(NOT IT_CHIP_CANDIDATE)
+            continue()
+        endif()
+
+        execute_process(COMMAND "${PROBE_RS_EXECUTABLE}" chip info "${IT_CHIP_CANDIDATE}"
+                        RESULT_VARIABLE IT_CHIP_RESULT
+                        OUTPUT_QUIET
+                        ERROR_QUIET)
+
+        if(IT_CHIP_RESULT EQUAL 0)
+            set(INTEGRATION_TEST_PROBE_RS_CHIP "${IT_CHIP_CANDIDATE}")
+            break()
+        endif()
+
+    endforeach()
+
+    if(NOT INTEGRATION_TEST_PROBE_RS_CHIP)
+        message(STATUS "probe-rs does not know chip '${TARGET_MCU_FULL_NAME}' (TARGET_MCU) - tests cannot be "
+                       "executed until INTEGRATION_TEST_PROBE_RS_CHIP is set (boards file or parameter).")
+    endif()
+
+endif()
+
+if(NOT INTEGRATION_TEST_ID_MASK)
+    set(INTEGRATION_TEST_ID_MASK "0xFFFFFFFF")
+endif()
+
+if(INTEGRATION_TEST_FLASH_SIZE_ADDRESS AND "${INTEGRATION_TEST_FLASH_SIZE_KB}" STREQUAL "")
+    message(FATAL_ERROR "INTEGRATION_TEST_FLASH_SIZE_ADDRESS is set, but INTEGRATION_TEST_FLASH_SIZE_KB is not.")
+endif()
+
+if(INTEGRATION_TEST_ID_ADDRESS AND "${INTEGRATION_TEST_ID_VALUE}" STREQUAL "")
+    message(FATAL_ERROR "INTEGRATION_TEST_ID_ADDRESS is set, but INTEGRATION_TEST_ID_VALUE is not.")
+endif()
+
+if(NOT INTEGRATION_TEST_ID_ADDRESS)
+    message(STATUS "INTEGRATION_TEST_ID_ADDRESS is not set - MCU on the board is not checked.")
+endif()
+
+# Host configuration - parameters of IntegrationTesting_Run.cmake (CTest) and
+# IntegrationTesting_AllBoards.cmake
+set(INTEGRATION_TEST_HOST_CONFIG        "${CMAKE_BINARY_DIR}/IntegrationTesting_Host.cmake")
+
+file(CONFIGURE OUTPUT "${INTEGRATION_TEST_HOST_CONFIG}" CONTENT
+"# Generated by IntegrationTesting.cmake - host configuration of integration tests
+set(IT_PROBE_RS   [==[${PROBE_RS_EXECUTABLE}]==])
+set(IT_CHIP       [==[${INTEGRATION_TEST_PROBE_RS_CHIP}]==])
+set(IT_PROBE      [==[${INTEGRATION_TEST_PROBE}]==])
+set(IT_ID_ADDRESS [==[${INTEGRATION_TEST_ID_ADDRESS}]==])
+set(IT_ID_MASK    [==[${INTEGRATION_TEST_ID_MASK}]==])
+set(IT_ID_VALUE   [==[${INTEGRATION_TEST_ID_VALUE}]==])
+set(IT_FLASH_SIZE_ADDRESS [==[${INTEGRATION_TEST_FLASH_SIZE_ADDRESS}]==])
+set(IT_FLASH_SIZE_KB      [==[${INTEGRATION_TEST_FLASH_SIZE_KB}]==])
+")
 
 message(STATUS "Unity:                ${UNITY_ROOT}")
-message(STATUS "STM32_Programmer_CLI: ${STM32_PROGRAMMER_CLI}")
+message(STATUS "probe-rs:             ${PROBE_RS_EXECUTABLE}")
+message(STATUS "Board:                ${INTEGRATION_TEST_BOARD}")
+message(STATUS "Chip:                 ${INTEGRATION_TEST_PROBE_RS_CHIP}")
 message(STATUS "Probe:                ${INTEGRATION_TEST_PROBE}")
-message(STATUS "Debug tool:           ${INTEGRATION_TEST_DEBUG_TOOL} ${IT_PROBE_RS_ARG} ${INTEGRATION_TEST_PROBE_RS_CHIP}")
-message(STATUS "Board:                ${INTEGRATION_TEST_BOARD_NAME}")
-message(STATUS "Device ID:            ${INTEGRATION_TEST_DEVICE_ID}")
+message(STATUS "MCU ID:               ${INTEGRATION_TEST_ID_ADDRESS} & ${INTEGRATION_TEST_ID_MASK} == ${INTEGRATION_TEST_ID_VALUE}")
+message(STATUS "Flash size:           ${INTEGRATION_TEST_FLASH_SIZE_ADDRESS} == ${INTEGRATION_TEST_FLASH_SIZE_KB} KB")
 
 #=========================== Testing libraries ================================#
 
@@ -452,12 +557,7 @@ function(IntegrationTesting_Add_Test)
                      "-DIT_ELF=$<TARGET_FILE:${TEST_TARGET}>"
                      "-DIT_LOG=${OUTPUT_LOG}"
                      "-DIT_NM=${CMAKE_NM}"
-                     "-DIT_PROGRAMMER=${STM32_PROGRAMMER_CLI}"
-                     "-DIT_PROBE=${INTEGRATION_TEST_PROBE}"
-                     "-DIT_BOARD=${INTEGRATION_TEST_BOARD_NAME}"
-                     "-DIT_DEVICE_ID=${INTEGRATION_TEST_DEVICE_ID}"
-                     "-DIT_PROBE_RS=${IT_PROBE_RS_ARG}"
-                     "-DIT_PROBE_RS_CHIP=${INTEGRATION_TEST_PROBE_RS_CHIP}"
+                     "-DIT_CONFIG=${INTEGRATION_TEST_HOST_CONFIG}"
                      "-DIT_TIMEOUT=${IT_TIMEOUT}"
                      "-DIT_CASE_TIMEOUT=${IT_CASE_TIMEOUT}"
                      -P "${INTEGRATION_TESTING_DIR}/IntegrationTesting_Run.cmake")

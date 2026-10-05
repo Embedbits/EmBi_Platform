@@ -1,6 +1,11 @@
 /**
+ * \defgroup AppMain AppMain
+ * \brief AppMain module
+ */
+
+/**
  * \author @AUTHOR@
- * \file Main.h
+ * \file AppMain.h
  * \ingroup AppMain
  * \brief Main functionality
  */

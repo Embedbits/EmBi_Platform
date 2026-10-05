@@ -36,6 +36,9 @@
 #
 #  - CMakeLists_Handler_Generate_CMakeLists( MODULE_PATH )
 #
+#  - CMakeLists_Handler_Get_NewlineStyle( FILE_PATH OUT_STYLE )
+#  - CMakeLists_Handler_Write_File( FILE_PATH CONTENT STYLE )
+#
 #
 # Example Usage:
 #   
@@ -641,12 +644,12 @@ function(CMakeLists_Handler_Generate_CMakeLists MODULE_PATH)
     
     string(REGEX REPLACE ";" "\n" TEMPLATE_FILE_MODULE_NAME                 "${TEMPLATE_FILE_MODULE_NAME}")  
     string(REGEX REPLACE ";" "\n" TEMPLATE_FILE_MODULE_VERSION              "${TEMPLATE_FILE_MODULE_VERSION}")             
-    string(REGEX REPLACE ";" "\n" TEMPLATE_FILE_PUBLIC_INCLUDE_DIRS_LIST    "${TEMPLATE_FILE_PUBLIC_INCLUDE_DIRS_LIST}")   
-    string(REGEX REPLACE ";" "\n" TEMPLATE_FILE_PRIVATE_INCLUDE_DIRS_LIST   "${TEMPLATE_FILE_PRIVATE_INCLUDE_DIRS_LIST}")  
-    string(REGEX REPLACE ";" "\n" TEMPLATE_FILE_SOURCE_FILE_LIST            "${TEMPLATE_FILE_SOURCE_FILE_LIST}")           
-    string(REGEX REPLACE ";" "\n" TEMPLATE_FILE_PUBLIC_HEADER_LIST          "${TEMPLATE_FILE_PUBLIC_HEADER_LIST}")        
-    string(REGEX REPLACE ";" "\n" TEMPLATE_FILE_PUBLIC_DEPENDENT_LIBS_LIST  "${TEMPLATE_FILE_PUBLIC_DEPENDENT_LIBS_LIST}") 
-    string(REGEX REPLACE ";" "\n" TEMPLATE_FILE_PRIVATE_DEPENDENT_LIBS_LIST "${TEMPLATE_FILE_PRIVATE_DEPENDENT_LIBS_LIST}")
+    string(REGEX REPLACE ";" "\n    " TEMPLATE_FILE_PUBLIC_INCLUDE_DIRS_LIST    "${TEMPLATE_FILE_PUBLIC_INCLUDE_DIRS_LIST}")   
+    string(REGEX REPLACE ";" "\n    " TEMPLATE_FILE_PRIVATE_INCLUDE_DIRS_LIST   "${TEMPLATE_FILE_PRIVATE_INCLUDE_DIRS_LIST}")  
+    string(REGEX REPLACE ";" "\n    " TEMPLATE_FILE_SOURCE_FILE_LIST            "${TEMPLATE_FILE_SOURCE_FILE_LIST}")           
+    string(REGEX REPLACE ";" "\n    " TEMPLATE_FILE_PUBLIC_HEADER_LIST          "${TEMPLATE_FILE_PUBLIC_HEADER_LIST}")        
+    string(REGEX REPLACE ";" "\n    " TEMPLATE_FILE_PUBLIC_DEPENDENT_LIBS_LIST  "${TEMPLATE_FILE_PUBLIC_DEPENDENT_LIBS_LIST}") 
+    string(REGEX REPLACE ";" "\n    " TEMPLATE_FILE_PRIVATE_DEPENDENT_LIBS_LIST "${TEMPLATE_FILE_PRIVATE_DEPENDENT_LIBS_LIST}")
     
     message(DEBUG "Generating CMakeLists.txt file with TEMPLATE_FILE_MODULE_NAME                 set to : ${CMAKE_LISTS_HANDLER_MODULE_NAME}")
     message(DEBUG "Generating CMakeLists.txt file with TEMPLATE_FILE_MODULE_VERSION              set to : ${CMAKE_LISTS_HANDLER_MODULE_VERSION}")
@@ -661,6 +664,54 @@ function(CMakeLists_Handler_Generate_CMakeLists MODULE_PATH)
                    "${MODULE_PATH}/CMakeLists.txt"
                    @ONLY)
     
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: CMakeLists_Handler_Get_NewlineStyle
+# Description:
+#   Returns line endings of a file. file(READ) removes carriage returns on
+#   Windows, line endings are therefore detected from hexadecimal content.
+# Parameters:
+#   FILE_PATH [in]: Path to the file
+#   OUT_STYLE [out]: "DOS" for CRLF line endings, otherwise "UNIX"
+# ------------------------------------------------------------------------------
+function(CMakeLists_Handler_Get_NewlineStyle FILE_PATH OUT_STYLE)
+
+    set(STYLE "UNIX")
+
+    if(EXISTS "${FILE_PATH}")
+        file(READ "${FILE_PATH}" HEX_CONTENT HEX)
+        string(FIND "${HEX_CONTENT}" "0d0a" CRLF_POS)
+        if(CRLF_POS GREATER_EQUAL 0)
+            set(STYLE "DOS")
+        endif()
+    endif()
+
+    set(${OUT_STYLE} "${STYLE}" PARENT_SCOPE)
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: CMakeLists_Handler_Write_File
+# Description:
+#   Writes content (read by file(READ), lines separated by LF) to a file with
+#   required line endings, independently of the host (file(WRITE) adds carriage
+#   returns on Windows). The content is written unchanged.
+# Parameters:
+#   FILE_PATH [in]: Path to the file
+#   CONTENT   [in]: File content
+#   STYLE     [in]: Line endings "UNIX" (LF) or "DOS" (CRLF)
+# ------------------------------------------------------------------------------
+function(CMakeLists_Handler_Write_File FILE_PATH CONTENT STYLE)
+
+    # file(CONFIGURE) replaces @VAR@ - every "@" is written through @AT@
+    set(AT "@")
+    string(REPLACE "@" "@AT@" ESCAPED_CONTENT "${CONTENT}")
+
+    file(CONFIGURE OUTPUT "${FILE_PATH}" CONTENT "${ESCAPED_CONTENT}" @ONLY NEWLINE_STYLE ${STYLE})
+
 endfunction()
 
 

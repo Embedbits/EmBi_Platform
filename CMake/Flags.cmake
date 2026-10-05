@@ -90,6 +90,7 @@ set(PRINT_HEADER_DEPENDENCIES           "-H")                      # Prints list
 # Linker settings                       
 set(LINKER_NOSYS                        "--specs=nosys.specs")      # Removes dependency on system calls (useful for embedded systems)
 set(LINKER_NANO                         "--specs=nano.specs")       # Enables smaller standard library functions
+set(LINKER_NOSTARTFILES                 "-nostartfiles")            # Removes default startup files (crt0) - startup code is provided by the project
 set(ENABLE_GC_SECTIONS                  "-Wl,--gc-sections")        # Enables linker garbage collection (removes unused sections)
 set(PRINT_MEMORY_USAGE                  "-Wl,--print-memory-usage") # Prints memory usage statistics after linking
 set(PRINTF_FLOAT                        "-u _printf_float")         # Enables floating-point support for printf

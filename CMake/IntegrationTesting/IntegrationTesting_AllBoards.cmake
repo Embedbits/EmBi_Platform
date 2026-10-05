@@ -7,102 +7,57 @@
 #   cmake -P EmBi_Platform/CMake/IntegrationTesting/IntegrationTesting_AllBoards.cmake
 #   cmake -DIT_LABEL=Gpio -P EmBi_Platform/CMake/IntegrationTesting/IntegrationTesting_AllBoards.cmake
 #
-# Connected ST-LINK probes are listed, the board of every probe ("Board Name",
-# eg. NUCLEO-H503RB) selects preset of its MCU "<MCU>_IntegrationTest" - the
-# MCU is derived from the board name (NUCLEO-H503RB -> STM32H503xB) and the
-# board is passed to the build (INTEGRATION_TEST_BOARD, board dependent pins).
-# Test firmware is built once per board type and executed on every connected
-# board of this type - the probe is selected by environment variable
-# INTEGRATION_TEST_PROBE_SN. JUnit results are stored per probe:
+# Connected boards are detected first (IntegrationTesting_Detect.cmake) - MCU of
+# every probe is identified by the MCU identification of the Ral presets, the
+# optional boards file of the project (IntegrationTestBoards.json in the project
+# root) names the boards, selects their presets and parameters. The boards file
+# of connected boards (Build/IntegrationTestBoards.json) lists preset and probes
+# of every board.
+#
+# For every board the preset is configured with INTEGRATION_TEST_BOARD=<board>
+# (parameters of the board are taken from the boards file of connected boards),
+# the firmware is built and executed on every probe of the board - the probe is
+# selected by environment variable INTEGRATION_TEST_PROBE_SN, the run script
+# checks the MCU before download. JUnit results are stored per probe:
 #   Build/<preset>/IntegrationTestResults_<sn>.xml
 #
 # Optional parameters:
-#   STM32_PROGRAMMER_CLI - STM32CubeProgrammer CLI (default installation folders, PATH)
-#   IT_LABEL             - CTest label filter (ctest -L), eg. module name
+#   IT_MCU_PRESETS_FILE - MCU identification (default Bsp/Ral/RalPresets.json)
+#   IT_BOARDS_OVERRIDE  - Boards file of the project (default IntegrationTestBoards.json)
+#   IT_BOARDS_FILE      - Boards file of connected boards (default Build/IntegrationTestBoards.json)
+#   IT_LABEL            - CTest label filter (ctest -L), eg. module name
 ################################################################################
 
 cmake_minimum_required(VERSION 3.25)
 
-include("${CMAKE_CURRENT_LIST_DIR}/IntegrationTesting_Probe.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/IntegrationTesting_Detect.cmake")
 
 #=============================== Constant values ==============================#
 
-# Suffix of integration test presets (CMakePresets.json)
-set(IT_PRESET_SUFFIX                    "_IntegrationTest")
-
 set(IT_PROJECT_DIR                      "${CMAKE_SOURCE_DIR}")
-set(IT_PRESETS_FILE                     "${IT_PROJECT_DIR}/CMakePresets.json")
 
-#============================= Tools localization =============================#
-
-if(NOT EXISTS "${IT_PRESETS_FILE}")
-    message(FATAL_ERROR "${IT_PRESETS_FILE} not found - execute the script from the project root folder.")
+if(NOT IT_MCU_PRESETS_FILE)
+    set(IT_MCU_PRESETS_FILE             "${IT_PROJECT_DIR}/Bsp/Ral/RalPresets.json")
 endif()
 
-if(NOT STM32_PROGRAMMER_CLI AND DEFINED ENV{STM32_PROGRAMMER_CLI})
-    set(STM32_PROGRAMMER_CLI "$ENV{STM32_PROGRAMMER_CLI}")
+if(NOT IT_BOARDS_OVERRIDE)
+    set(IT_BOARDS_OVERRIDE              "${IT_PROJECT_DIR}/IntegrationTestBoards.json")
 endif()
 
-find_program(STM32_PROGRAMMER_CLI
-    NAMES STM32_Programmer_CLI
-    PATHS "C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin"
-          "C:/Program Files/ST/STM32Cube/STM32CubeProgrammer/bin"
-          "$ENV{HOME}/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin"
-          "/opt/st/stm32cubeprogrammer/bin"
-)
-
-if(NOT STM32_PROGRAMMER_CLI)
-    message(FATAL_ERROR "STM32_Programmer_CLI not found. Pass -DSTM32_PROGRAMMER_CLI=<path>.")
+if(NOT IT_BOARDS_FILE)
+    set(IT_BOARDS_FILE                  "${IT_PROJECT_DIR}/Build/IntegrationTestBoards.json")
 endif()
 
-#=========================== Connected boards =================================#
+#============================== Connected boards ==============================#
 
-IntegrationTesting_ListProbes("${STM32_PROGRAMMER_CLI}" PROBE_SNS PROBE_BOARDS)
+IntegrationTesting_DetectBoards("${IT_PROJECT_DIR}" "${IT_MCU_PRESETS_FILE}" "${IT_BOARDS_OVERRIDE}" "${IT_BOARDS_FILE}")
 
-list(LENGTH PROBE_SNS PROBE_CNT)
+file(READ "${IT_BOARDS_FILE}" BOARDS_CONTENT)
 
-if(PROBE_CNT EQUAL 0)
-    message(FATAL_ERROR "No ST-LINK probe connected.")
-endif()
+string(JSON BOARDS_CNT ERROR_VARIABLE BOARDS_ERROR LENGTH "${BOARDS_CONTENT}" boards)
 
-file(READ "${IT_PRESETS_FILE}" PRESETS_CONTENT)
-
-# Boards with integration test preset; per board (eg. NUCLEO-H533RE):
-#   IT_BOARD_PRESET_<board> - preset of the MCU (STM32H533xE_IntegrationTest)
-#   IT_BOARD_SNS_<board>    - serial numbers of connected probes
-set(IT_BOARDS "")
-
-math(EXPR PROBE_LAST "${PROBE_CNT} - 1")
-
-foreach(PROBE_IDX RANGE ${PROBE_LAST})
-
-    list(GET PROBE_SNS    ${PROBE_IDX} PROBE_SN)
-    list(GET PROBE_BOARDS ${PROBE_IDX} PROBE_BOARD)
-
-    # Board name contains MCU line, package and flash code of its MCU:
-    # NUCLEO-H533RE -> STM32H533xE
-    if(NOT PROBE_BOARD MATCHES "^[A-Z0-9]+-([A-Z][0-9A-Z][0-9A-Z][0-9A-Z])[A-Z0-9]([0-9A-Z])")
-        message(STATUS "Board ${PROBE_BOARD} (sn=${PROBE_SN}) - MCU cannot be derived from board name, skipped")
-        continue()
-    endif()
-
-    set(PRESET "STM32${CMAKE_MATCH_1}x${CMAKE_MATCH_2}${IT_PRESET_SUFFIX}")
-
-    if(PRESETS_CONTENT MATCHES "\"name\"[ \t]*:[ \t]*\"${PRESET}\"")
-        message(STATUS "Board ${PROBE_BOARD} (sn=${PROBE_SN}) -> preset ${PRESET}")
-        list(APPEND IT_BOARDS "${PROBE_BOARD}")
-        set(IT_BOARD_PRESET_${PROBE_BOARD} "${PRESET}")
-        list(APPEND IT_BOARD_SNS_${PROBE_BOARD} "${PROBE_SN}")
-    else()
-        message(STATUS "Board ${PROBE_BOARD} (sn=${PROBE_SN}) - preset ${PRESET} does not exist, skipped")
-    endif()
-
-endforeach()
-
-list(REMOVE_DUPLICATES IT_BOARDS)
-
-if(NOT IT_BOARDS)
-    message(FATAL_ERROR "No connected board has integration test preset.")
+if(BOARDS_ERROR OR BOARDS_CNT EQUAL 0)
+    message(FATAL_ERROR "No board is connected (${IT_BOARDS_FILE}).")
 endif()
 
 #=========================== Build and execution ==============================#
@@ -116,18 +71,19 @@ endif()
 set(SUMMARY     "")
 set(FAILED_RUNS 0)
 
-foreach(BOARD IN LISTS IT_BOARDS)
+math(EXPR BOARDS_LAST "${BOARDS_CNT} - 1")
 
-    set(PRESET "${IT_BOARD_PRESET_${BOARD}}")
+foreach(BOARD_IDX RANGE ${BOARDS_LAST})
 
-    # ST-LINK reports board name with dash (NUCLEO-H533RE), CMake name uses
-    # underscore - selects board dependent pins of the tests (IT_BOARD_<name>)
-    string(REPLACE "-" "_" BOARD_DEFINE "${BOARD}")
+    string(JSON BOARD  MEMBER "${BOARDS_CONTENT}" boards ${BOARD_IDX})
+    string(JSON PRESET GET    "${BOARDS_CONTENT}" boards ${BOARD} preset)
+    string(JSON PROBES_CNT    LENGTH "${BOARDS_CONTENT}" boards ${BOARD} probes)
 
-    # Firmware for the board - built once per board type (boards with the
-    # same MCU share the build folder of the preset, it is reconfigured)
+    # Configuration of the board - parameters and probes of the board from the
+    # boards file of connected boards
     execute_process(
-        COMMAND "${CMAKE_COMMAND}" --preset ${PRESET} -DINTEGRATION_TEST_BOARD=${BOARD_DEFINE}
+        COMMAND "${CMAKE_COMMAND}" --preset ${PRESET} -DINTEGRATION_TEST_BOARD=${BOARD}
+                -DINTEGRATION_TEST_BOARDS_FILE=${IT_BOARDS_FILE}
         WORKING_DIRECTORY "${IT_PROJECT_DIR}"
         RESULT_VARIABLE   CONFIGURE_RESULT
     )
@@ -138,16 +94,26 @@ foreach(BOARD IN LISTS IT_BOARDS)
             WORKING_DIRECTORY "${IT_PROJECT_DIR}"
             RESULT_VARIABLE   BUILD_RESULT
         )
-    else()
-        set(BUILD_RESULT "${CONFIGURE_RESULT}")
     endif()
 
-    foreach(PROBE_SN IN LISTS IT_BOARD_SNS_${BOARD})
+    math(EXPR PROBES_LAST "${PROBES_CNT} - 1")
 
-        if(BUILD_RESULT EQUAL 0)
-            message(STATUS "Integration tests ${PRESET} on ${BOARD} sn=${PROBE_SN}")
+    foreach(PROBE_IDX RANGE ${PROBES_LAST})
 
-            set(ENV{INTEGRATION_TEST_PROBE_SN} "${PROBE_SN}")
+        string(JSON PROBE GET "${BOARDS_CONTENT}" boards ${BOARD} probes ${PROBE_IDX})
+
+        # Serial number of the probe (VID:PID:SN), whole selector without it
+        string(REGEX REPLACE "^[0-9A-Fa-f]+:[0-9A-Fa-f]+:" "" PROBE_SN "${PROBE}")
+        string(REPLACE ":" "_" PROBE_SN "${PROBE_SN}")
+
+        if(NOT CONFIGURE_RESULT EQUAL 0)
+            set(RUN_STATE "CONFIGURE FAILED")
+        elseif(NOT BUILD_RESULT EQUAL 0)
+            set(RUN_STATE "BUILD FAILED")
+        else()
+            message(STATUS "Integration tests ${PRESET} on ${BOARD} probe ${PROBE}")
+
+            set(ENV{INTEGRATION_TEST_PROBE_SN} "${PROBE}")
 
             execute_process(
                 COMMAND "${CMAKE_CTEST_COMMAND}" --preset ${PRESET} ${CTEST_FILTER}
@@ -163,15 +129,13 @@ foreach(BOARD IN LISTS IT_BOARDS)
             else()
                 set(RUN_STATE "FAILED")
             endif()
-        else()
-            set(RUN_STATE "BUILD FAILED")
         endif()
 
         if(NOT RUN_STATE STREQUAL "PASSED")
             math(EXPR FAILED_RUNS "${FAILED_RUNS} + 1")
         endif()
 
-        string(APPEND SUMMARY "\n  ${BOARD} ${PRESET} (sn=${PROBE_SN}): ${RUN_STATE}")
+        string(APPEND SUMMARY "\n  ${BOARD} ${PRESET} (${PROBE}): ${RUN_STATE}")
 
     endforeach()
 

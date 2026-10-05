@@ -18,25 +18,25 @@ set( @TEMPLATE_FILE_MODULE_NAME@_PrivateIncludeDirs
 
 # Source files list for current library generation
 set( @TEMPLATE_FILE_MODULE_NAME@_SourceFiles
-    @TEMPLATE_FILE_SOURCE_FILE_LIST@ 
+    @TEMPLATE_FILE_SOURCE_FILE_LIST@
 )
 
 
 # List of public header files provided by the current library
 set( @TEMPLATE_FILE_MODULE_NAME@_PublicHeaders 
-    @TEMPLATE_FILE_PUBLIC_HEADER_LIST@ 
+    @TEMPLATE_FILE_PUBLIC_HEADER_LIST@
 )
 
 
 # List of dependent libraries that are publicly used by the current library
 set( @TEMPLATE_FILE_MODULE_NAME@_PublicDependentLibs
-    @TEMPLATE_FILE_PUBLIC_DEPENDENT_LIBS_LIST@ 
+    @TEMPLATE_FILE_PUBLIC_DEPENDENT_LIBS_LIST@
 )
 
 
 # List of dependent libraries that are privately used by the current library
 set( @TEMPLATE_FILE_MODULE_NAME@_PrivateDependentLibs
-    @TEMPLATE_FILE_PRIVATE_DEPENDENT_LIBS_LIST@ 
+    @TEMPLATE_FILE_PRIVATE_DEPENDENT_LIBS_LIST@
 )
 
 
@@ -78,10 +78,9 @@ target_include_directories( @TEMPLATE_FILE_MODULE_NAME@_Lib
     PUBLIC
         $<BUILD_INTERFACE:${PUBLIC_HEADERS_DIR}>
         $<INSTALL_INTERFACE:include>
-        @TEMPLATE_FILE_MODULE_NAME@_PublicIncludeDirs
+        ${@TEMPLATE_FILE_MODULE_NAME@_PublicIncludeDirs}
     PRIVATE
-        ${@TEMPLATE_FILE_MODULE_NAME@_IncludeDirs}
-        @TEMPLATE_FILE_MODULE_NAME@_PrivateIncludeDirs
+        ${@TEMPLATE_FILE_MODULE_NAME@_PrivateIncludeDirs}
 )
 
 

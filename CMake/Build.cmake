@@ -115,6 +115,20 @@ else()
     endif()
 endif()  
 
+#======================= Documentation availability ===========================#
+# Modules register their sources by Doxygen_AddPath() (condition
+# DOXYGEN_AVAILABLE) - available if the documentation is enabled and doxygen
+# artifact is loaded (ArtifactsConfig.txt).
+set(DOXYGEN_AVAILABLE "OFF")
+
+if(DOXYGEN_ENABLED)
+    if(COMMAND Doxygen_AddPath AND COMMAND Doxygen_Generate)
+        set(DOXYGEN_AVAILABLE "ON")
+    else()
+        message(WARNING "DOXYGEN_ENABLED is ON but doxygen artifact is not loaded (ArtifactsConfig.txt) - documentation is not generated.")
+    endif()
+endif()
+
 #================================ MCU build ===================================#
 # "IntegrationTest" is MCU build too - modules are built for target exactly as
 # in firmware, instead of project firmware every registered integration test
@@ -124,7 +138,7 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "Release" OR 
     include("${CMAKE_CURRENT_LIST_DIR}/Flags.cmake")
 
     # Build configuration flags (Necessary part before project build)
-    set(CMAKE_C_FLAGS                   "${ENABLE_ALL_WARNINGS} ${ENABLE_EXTRA_WARNINGS} ${REMOVE_UNUSED_DATA} ${REMOVE_UNUSED_FUNCTIONS} ${LINKER_NOSYS}")
+    set(CMAKE_C_FLAGS                   "${ENABLE_ALL_WARNINGS} ${ENABLE_EXTRA_WARNINGS} ${REMOVE_UNUSED_DATA} ${REMOVE_UNUSED_FUNCTIONS} ${LINKER_NOSYS} ${LINKER_NOSTARTFILES}")
 
     if(CMAKE_BUILD_TYPE STREQUAL "IntegrationTest")
         if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/IntegrationTesting/IntegrationTesting.cmake")
@@ -262,9 +276,42 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "UnitTest")
 endif()
 
 #========================= Documentation generation ===========================#
-if(DOXYGEN_ENABLED)
-    
+if(DOXYGEN_AVAILABLE STREQUAL "ON")
+
     set(DOXYGEN_PROJECT_NAME "${PROJECT_NAME}")
+
+    # C firmware settings, values defined by the project before are kept
+    if(NOT DEFINED DOXYGEN_OPTIMIZE_OUTPUT_FOR_C)
+        set(DOXYGEN_OPTIMIZE_OUTPUT_FOR_C YES)
+    endif()
+
+    # Static functions and variables are most of the modules implementation
+    if(NOT DEFINED DOXYGEN_EXTRACT_STATIC)
+        set(DOXYGEN_EXTRACT_STATIC YES)
+    endif()
+
+    if(NOT DEFINED DOXYGEN_FILE_PATTERNS)
+        set(DOXYGEN_FILE_PATTERNS *.c *.h *.cpp *.hpp *.md)
+    endif()
+
+    # Code is documented as compiled - compile definitions of the project
+    # (MCU, MCU family...), GCC attributes are ignored
+    if(NOT DEFINED DOXYGEN_PREDEFINED)
+        get_directory_property(DOXYGEN_COMPILE_DEFINITIONS DIRECTORY "${CMAKE_SOURCE_DIR}" COMPILE_DEFINITIONS)
+        list(APPEND DOXYGEN_COMPILE_DEFINITIONS ${MCU_FAMILY_ID} ${TARGET_MCU})
+        list(JOIN DOXYGEN_COMPILE_DEFINITIONS " " DOXYGEN_COMPILE_DEFINITIONS)
+        set(DOXYGEN_PREDEFINED "__attribute__(x)= ${DOXYGEN_COMPILE_DEFINITIONS}")
+    endif()
+
+    # Only macros of DOXYGEN_PREDEFINED are expanded (__attribute__)
+    if(NOT DEFINED DOXYGEN_MACRO_EXPANSION)
+        set(DOXYGEN_MACRO_EXPANSION YES)
+    endif()
+
+    if(NOT DEFINED DOXYGEN_EXPAND_ONLY_PREDEF)
+        set(DOXYGEN_EXPAND_ONLY_PREDEF YES)
+    endif()
+
     Doxygen_Generate()
     
 endif()

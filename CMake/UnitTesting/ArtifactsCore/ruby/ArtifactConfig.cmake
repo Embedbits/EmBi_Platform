@@ -26,8 +26,9 @@ endfunction()
 # The name of function must consist of folder name (ruby) and postfix
 # (_ArtifactInit). Otherwise the buildprocess will fail.
 #
-# Binary part (Windows) is extracted RubyInstaller archive (without devkit).
-# On Unix the system Ruby is expected, artifact is released only for Win.
+# Binary part is portable Ruby with bin/ruby[.exe] at the top level - Win:
+# RubyInstaller archive (without devkit), Unix / DarwinARM: jdx/ruby or
+# Homebrew portable-ruby build.
 # Sets RUBY_EXECUTABLE used by UnitTesting.cmake.
 #
 # ARTIFACT_BIN_PATH_ARG [in]: Path to the binary part of artifact

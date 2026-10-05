@@ -1,4 +1,9 @@
 /**
+ * \defgroup @MODULE_NAME@ @MODULE_NAME@
+ * \brief @MODULE_NAME@ module
+ */
+
+/**
  * \author @AUTHOR@
  * \file @MODULE_NAME@_Types.h
  * \ingroup @MODULE_NAME@

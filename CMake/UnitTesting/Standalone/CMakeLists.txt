@@ -82,7 +82,7 @@ if(UNIT_TEST_TOOLS STREQUAL "ARTIFACTS")
                             "(git clone --recurse-submodules) or use -DUNIT_TEST_TOOLS=SYSTEM.")
     endif()
 
-    # Host specific tools - gcc and ruby artifacts are released for Windows only
+    # Host specific tools - gcc, ruby and ninja artifacts are released per OS
     if(NOT CONFIG_FILE_PATH AND NOT DEFINED ENV{CONFIG_FILE_PATH})
         if(CMAKE_HOST_WIN32)
             set(CONFIG_FILE_PATH "${CMAKE_CURRENT_LIST_DIR}/Artifacts/Win")

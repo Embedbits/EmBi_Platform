@@ -19,6 +19,7 @@
 /* ============================= INCLUDES =================================== */
 #include "IntegrationTesting.h"             /* Integration testing on target  */
 #include "IntegrationTesting_Target.h"      /* Target interface (self)        */
+#include "stdlib.h"                         /* abort() replaced by the target */
 #include "BspMain.h"                        /* Entry point called by StartUp  */
 #include "Nvic_Port.h"                      /* Fault handlers, system reset   */
 /* ============================= TYPEDEFS =================================== */
@@ -117,6 +118,28 @@ void ItTarget_SystemReset( void )
     for( ;; )
     {
         /* Reset is in progress */
+    }
+}
+
+
+/**
+ * \brief Abnormal termination (replaces abort() of the C library).
+ *
+ * abort() of the C library raises SIGABRT by system calls _kill() / _getpid(),
+ * which are not available on the target (nosys stubs, linker warnings). It is
+ * linked even without explicit call - Unity uses setjmp(), which pulls the ARM
+ * unwinder calling abort(). The abort is reported to the framework as a fault
+ * of the running test case (address of the caller in LR).
+ */
+void abort( void )
+{
+    const integrationTesting_FaultReg_t faultReg = { "LR", (uint32_t)__builtin_return_address( 0u ) };
+
+    IntegrationTesting_ReportFault( "abort", &faultReg, 1u );
+
+    for( ;; )
+    {
+        /* Fault is reported, the framework resets the target */
     }
 }
 

@@ -74,6 +74,10 @@ gcc-arm-none-eabi;13.2.rel1;2
 
 This option will copy STM32CubeIDE project files into the project repository (the top-level `STM32CubeIDE/` folder — see [Project Structure](#project-structure) for how this relates to the template copy shipped inside `EmBi_Platform/STM32CubeIDE`).
 
+#### Option: `Initialize VSCode project`
+
+This option generates the VSCode configuration of the project (`.vscode/`): tasks for build, flashing, unit tests and integration tests, probe-rs debug configurations of the selected MCUs (firmware, attach, integration test firmware), gdb debugging of unit tests, CMake Tools / IntelliSense settings and recommended extensions. See [Project tools](CMake/HelperTools/README.md#vscode-project-initialization).
+
 #### Option: `Configure application layer`
 
 > **This has to be executed once during first project initialization.**
@@ -141,9 +145,36 @@ Re-running this option for an already-added component with a different version I
 
 Updates a single, already-added middleware component to its **latest available version** — its newest Git tag, or the latest commit of its default branch if it has no tags yet. The same middleware list as above is shown first, so you can pick which component to update.
 
-#### Option: `Update EmBi_Platform`
+#### Option: `Module update (Updater)`
 
-Runs the Updater tool to check the currently integrated EmBi_Platform (STM_Template) version against the latest available release and applies the update, re-running any configuration steps that changed as a result.
+Runs the Updater tool (`CMake/Updater/Updater.cmake`), which applies update steps of EmBi_Platform to the **modules of the project** - folders in `Application`, `Bsp` and `Middlewares` with a `CMakeLists.txt` generated from the module template (header `# Template version:`); test sets in `Tests/` are not modules. Every update version is a folder in `CMake/Updater/Updates/<version>/` with one or more step scripts, executed in alphabetical order for every selected module.
+
+| Update | Step |
+|--------|------|
+| `0.0.1` | Regenerates module `CMakeLists.txt` from the current template (lists parsed from the file), module specific content after the template part (e.g. test registration) is kept. |
+| `0.0.2` | Fixes include directories in `target_include_directories()` - `${<Module>_PublicIncludeDirs}` / `${<Module>_PrivateIncludeDirs}` instead of the variable names (only these lines are changed). |
+| `0.0.3` | Defines doxygen group of the module (`\defgroup <Module>` block inserted at the beginning of `<Module>_Types.h`, otherwise `<Module>.h`) if the files of the module use `\ingroup <Module>` and the group is not defined. |
+
+The option asks for:
+1. **Range of updates** - first and last update ID of the printed list (empty = all updates).
+2. **Modules** - module IDs separated by comma (empty or `0` = all modules).
+3. **Branches** of the module repositories - empty = the checked out branches only, or branch names / patterns separated by comma (`*` any characters, `?` one character), e.g. `Dev/STM32F4/*,Releases/STM32G4`. Local branches and branches of remote `origin` are matched (a local tracking branch is created when needed). Every matching branch is checked out, updated and the originally checked out branch is restored at the end. The project repository itself is updated on its checked out branch only.
+4. **Mode**
+   - `Dry run` (default) - changes are shown as a diff and reverted, nothing is written.
+   - `Apply` - changes are kept uncommitted (checked out branches only).
+   - `Apply and commit` - changes are committed with the entered message (e.g. `AB#123: Module CMakeLists updated.`), optionally pushed to `origin`.
+
+Repositories with uncommitted changes of tracked files are skipped in `Dry run` and `Apply and commit` modes. A summary with the result for every repository and branch (up to date, changed files, commit ID) is printed at the end. Update steps are idempotent - a repeated run reports `up to date`.
+
+The same update can be run from the command line, e.g.:
+
+```bash
+cmake -DFUNCTION_ID=UPDATE -DUPDATE_FROM_VERSION=0.0.2 -DUPDATE_BRANCHES="Dev/STM32F4/*" \
+      -DUPDATE_MODE=COMMIT -DUPDATE_COMMIT_MESSAGE="AB#123: Module CMakeLists updated." \
+      -P EmBi_Platform/CMake/Updater/Updater.cmake
+```
+
+All parameters are described in the header of the main functionality in `Updater.cmake`.
 
 ---
 

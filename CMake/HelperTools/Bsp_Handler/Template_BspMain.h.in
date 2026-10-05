@@ -1,4 +1,9 @@
 /**
+ * \defgroup BspMain BspMain
+ * \brief BspMain module
+ */
+
+/**
  * \author @AUTHOR@
  * \file BspMain.h
  * \ingroup BspMain

@@ -206,8 +206,8 @@ Rules:
 
 | Artifact | Bin content | Releases | Status |
 |---|---|---|---|
-| `gcc` | MinGW-w64 (`mingw64/bin/gcc.exe`) | Win | exists, Core handler has wrong function names (`doxygen_*` instead of `gcc_*`) - PATH is not set |
-| `ruby` | RubyInstaller archive without devkit (`bin/ruby.exe`) | Win | new - `ArtifactsCore/ruby` |
+| `gcc` | Win: MinGW-w64 (`mingw64/bin/gcc.exe`), Unix: xPack GCC (`gcc/bin/gcc`) | Win, Unix | exists |
+| `ruby` | Portable Ruby (`bin/ruby[.exe]`) - Win: RubyInstaller without devkit, Unix / DarwinARM: jdx/ruby or Homebrew portable-ruby | Win, Unix, DarwinARM | exists |
 | `unity` | Unity repository (`src/`, `auto/`) | Win, Unix, DarwinARM (same zip) | new - `ArtifactsCore/unity` |
 | `cmock` | CMock repository **incl. submodules** (`vendor/unity` is required by `cmock.rb`) | Win, Unix, DarwinARM (same zip) | new - `ArtifactsCore/cmock` |
 
