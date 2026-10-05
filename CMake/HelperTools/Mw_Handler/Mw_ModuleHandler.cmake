@@ -13,26 +13,41 @@
 # Selecting a component (Mw_ModuleHandler_Config) results in TWO folders
 # being created in the project:
 #
-#   Middlewares/ThirdParty/<Name>/   The component's vendor source, added as
-#                                    a real GIT submodule pointing directly
-#                                    at its own repository, checked out at
-#                                    the selected version (a GIT tag, or the
-#                                    "Latest" sentinel - the newest tag).
-#                                    Never edited by hand - anything written
-#                                    here is lost on the next version switch.
+#   Middlewares/Core/<Name>/   The component's vendor source, added as
+#                              a real GIT submodule pointing directly
+#                              at its own repository, checked out at
+#                              the selected version (a GIT tag, or the
+#                              "Latest" sentinel - the newest tag).
+#                              Never edited by hand - anything written
+#                              here is lost on the next version switch.
 #
-#   Middlewares/<Name>/              A project-side handler/wrapper module,
-#                                    scaffolded once (via the same ModuleInit
-#                                    used by Setup.bat/sh's "Create module"
-#                                    option 1 - see SwModule_Handler/ModuleInit.cmake)
-#                                    and never overwritten afterwards - this
-#                                    is where the user's own glue/port code
-#                                    and configuration for the component goes.
+#   Middlewares/<Name>App/     A project-side handler/wrapper module,
+#                              scaffolded once (via the same ModuleInit
+#                              used by Setup.bat/sh's "Create module"
+#                              option 1 - see SwModule_Handler/ModuleInit.cmake)
+#                              and never overwritten afterwards - this
+#                              is where the user's own glue/port code
+#                              and configuration for the component goes.
+#                              Suffixed with MW_APP_SUFFIX ("App") so the
+#                              folder, its files and its CMake library
+#                              (<Name>App_Lib) never collide with the
+#                              vendored component's own names.
 #
-# Both are wired into the build via add_subdirectory() entries appended to
-# Middlewares/Middlewares.cmake - the handler folder always, the ThirdParty
-# folder only once it has its own CMakeLists.txt (most vendored libraries do
-# not ship one that fits this project's conventions out of the box).
+# Both are wired into the build:
+#
+#   Middlewares/Middlewares.cmake    add_subdirectory() per handler folder
+#                                    (Middlewares/<Name>App) plus exactly one
+#                                    add_subdirectory() for Core/.
+#
+#   Middlewares/Core/CMakeLists.txt  Regenerated from scratch on every
+#                                    configuration/update run (same idea as
+#                                    Bsp/Mcal/CMakeLists.txt) - one
+#                                    add_subdirectory() per vendored
+#                                    component that ships its own
+#                                    CMakeLists.txt at the checked-out
+#                                    version. A component without one is
+#                                    listed as a comment only, so the
+#                                    project still configures.
 #
 # User can execute configuration of a Middlewares module through this CMake
 # script.
@@ -76,7 +91,11 @@ SysConfig_Get_ProjectRootPath(PROJECT_ROOT_PATH)
 set(MW_REL_PATH "Middlewares")
 
 # Vendored (GIT submodule) middleware sources path, relative to project root.
-set(MW_THIRDPARTY_REL_PATH "${MW_REL_PATH}/ThirdParty")
+set(MW_CORE_REL_PATH "${MW_REL_PATH}/Core")
+
+# Suffix appended to a component name to form its project-side handler
+# module name (folder, files, CMake library) - e.g. "ModBus" -> "ModBusApp".
+set(MW_APP_SUFFIX "App")
 
 # Middlewares (MW) catalog cache path - a clone of the MW_REPO_URL catalog
 # repository itself, NOT where the selected components end up.
@@ -141,8 +160,9 @@ endfunction()
 #   ├── Application              (Application layer module)
 #   ├── Middlewares*             (Middlewares layer module)
 #   │   ├── Middlewares.cmake*   (Middlewares root CMakeList file)
-#   │   └── ThirdParty*          (Vendored middleware sources, one GIT
-#   │                             submodule per selected component)
+#   │   └── Core*                (Vendored middleware sources, one GIT
+#   │       │                     submodule per selected component)
+#   │       └── CMakeLists.txt*  (Generated, add_subdirectory() per component)
 #   │
 #   ├── Bsp                      (Board Support Packages layer module)
 #   └── Stm_Template             (Template handler module)
@@ -152,13 +172,58 @@ endfunction()
 function(Mw_ModuleHandler_FolderStructInit)
 
     file(MAKE_DIRECTORY "${PROJECT_ROOT_PATH}/${MW_REL_PATH}")
-    file(MAKE_DIRECTORY "${PROJECT_ROOT_PATH}/${MW_THIRDPARTY_REL_PATH}")
+    file(MAKE_DIRECTORY "${PROJECT_ROOT_PATH}/${MW_CORE_REL_PATH}")
 
     set(OUTPUT_PATH "${PROJECT_ROOT_PATH}/${MW_REL_PATH}/Middlewares.cmake")
     set(CONTENT " ")
 
     if(NOT EXISTS "${OUTPUT_PATH}")
         file(WRITE "${OUTPUT_PATH}" "${CONTENT}")
+    endif()
+
+    # Core/ is always wired exactly once - which vendored components
+    # it actually builds is decided by the generated
+    # Core/CMakeLists.txt (see Mw_ModuleHandler_CoreCMakeListsGenerate).
+    Mw_ModuleHandler_CoreFirst()
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Mw_ModuleHandler_CoreFirst
+# Description:
+#   Keeps the Core add_subdirectory() entry as the very first entry of
+#   the Middlewares root CMakeLists (Middlewares/Middlewares.cmake). Vendored
+#   middleware libraries (freertos_kernel, ...) must already exist when the
+#   project handler modules linking them are processed. Every existing
+#   occurrence of the entry is removed and the entry is prepended, so a file
+#   with a different order is fixed on the next configuration run too.
+# ------------------------------------------------------------------------------
+function(Mw_ModuleHandler_CoreFirst)
+
+    set(MW_CMAKELIST_PATH "${PROJECT_ROOT_PATH}/${MW_REL_PATH}/Middlewares.cmake")
+    set(CORE_LINE "add_subdirectory(\${CMAKE_CURRENT_LIST_DIR}/Core)")
+
+    set(EXISTING_CONTENT "")
+    if(EXISTS "${MW_CMAKELIST_PATH}")
+        file(READ "${MW_CMAKELIST_PATH}" EXISTING_CONTENT)
+    endif()
+
+    # Plain string(REPLACE ...) rather than a regex - CORE_LINE contains
+    # regex metacharacters ("(", ")", "$"). Matches only the exact Core
+    # line, never the legacy per-component "Core/<Name>" ones.
+    string(REPLACE "${CORE_LINE}\n" "" NEW_CONTENT "${EXISTING_CONTENT}\n")
+    string(STRIP "${NEW_CONTENT}" NEW_CONTENT)
+
+    if(NEW_CONTENT STREQUAL "")
+        set(NEW_CONTENT "${CORE_LINE}\n")
+    else()
+        set(NEW_CONTENT "${CORE_LINE}\n${NEW_CONTENT}\n")
+    endif()
+
+    if(NOT "${NEW_CONTENT}" STREQUAL "${EXISTING_CONTENT}")
+        file(WRITE "${MW_CMAKELIST_PATH}" "${NEW_CONTENT}")
+        message(STATUS "'Core' placed first in Middlewares.cmake")
     endif()
 
 endfunction()
@@ -170,10 +235,10 @@ endfunction()
 #   Appends an add_subdirectory() entry for IN_REL_SUBDIR into the
 #   Middlewares root CMakeLists (Middlewares/Middlewares.cmake), unless that
 #   exact entry is already present. IN_REL_SUBDIR is always relative to
-#   Middlewares/ itself (e.g. "FreeRTOS" for the handler folder, or
-#   "ThirdParty/FreeRTOS" for the vendored submodule) - matched as the exact
+#   Middlewares/ itself (e.g. "FreeRTOSApp" for the handler folder, or
+#   "Core/FreeRTOS" for the vendored submodule) - matched as the exact
 #   generated add_subdirectory() line, rather than a bare name substring, so
-#   a handler folder and its ThirdParty counterpart sharing the same base
+#   a handler folder and its Core counterpart sharing the same base
 #   name never false-positive against each other.
 #
 # IN_REL_SUBDIR [in]: Sub-folder to add, relative to Middlewares/.
@@ -198,7 +263,8 @@ function(Mw_ModuleHandler_UpdateCMakeLists IN_REL_SUBDIR)
         endif()
 
         # Append to the end
-        string(APPEND EXISTING_CONTENT "\n${NEW_LINE}")
+        string(STRIP "${EXISTING_CONTENT}" EXISTING_CONTENT)
+        string(APPEND EXISTING_CONTENT "\n${NEW_LINE}\n")
         file(WRITE "${MW_CMAKELIST_PATH}" "${EXISTING_CONTENT}")
     else()
         # Create new file
@@ -230,8 +296,18 @@ function(Mw_ModuleHandler_GetModuleList OUT_NAMES OUT_URLS OUT_ACTIVES OUT_COUNT
                                 MODULE_ACTIVES
                                 MODULE_COUNT)
 
+    # The catalog declares its components relative to itself (e.g.
+    # "../ModBus") - resolve them against the catalog URL, otherwise
+    # ls-remote / submodule add would resolve them against the current
+    # directory or the project's own remote.
+    set(ABS_MODULE_URLS "")
+    foreach(MODULE_URL ${MODULE_URLS})
+        GitHandler_ResolveRelativeUrl(${MW_REPO_URL} ${MODULE_URL} ABS_MODULE_URL)
+        list(APPEND ABS_MODULE_URLS "${ABS_MODULE_URL}")
+    endforeach()
+
     set(${OUT_NAMES}   ${MODULE_NAMES}   PARENT_SCOPE)
-    set(${OUT_URLS}    ${MODULE_URLS}    PARENT_SCOPE)
+    set(${OUT_URLS}    ${ABS_MODULE_URLS} PARENT_SCOPE)
     set(${OUT_ACTIVES} ${MODULE_ACTIVES} PARENT_SCOPE)
     set(${OUT_COUNT}   ${MODULE_COUNT}   PARENT_SCOPE)
 
@@ -326,12 +402,14 @@ endfunction()
 # ------------------------------------------------------------------------------
 # Function: Mw_ModuleHandler_HandlerFolderInit
 # Description:
-#   Scaffolds the project-side handler folder Middlewares/<Name>/ for a
+#   Scaffolds the project-side handler folder Middlewares/<Name>App/ for a
 #   middleware component by reusing ModuleInit (SwModule_Handler/ModuleInit.cmake -
 #   the exact same generator behind Setup.bat/sh's "Create module" option 1),
 #   rather than a Mw-specific template. This produces the standard module
-#   shape - <Name>.c, <Name>.h, <Name>_Port.h, <Name>_Types.h, CMakeLists.txt -
-#   directly under Middlewares/<Name>/.
+#   shape - <Name>App.c, <Name>App.h, <Name>App_Port.h, <Name>App_Types.h,
+#   CMakeLists.txt (library <Name>App_Lib) - directly under
+#   Middlewares/<Name>App/. MW_APP_SUFFIX keeps the handler module's names
+#   distinct from the vendored component in Core/<Name>.
 #
 #   ModuleInit only ever creates a file that does not already exist, so this
 #   is safe to call again on every Mw_ModuleHandler_Config run - an already
@@ -342,32 +420,96 @@ endfunction()
 # ------------------------------------------------------------------------------
 function(Mw_ModuleHandler_HandlerFolderInit IN_MODULE_NAME)
 
-    ModuleInit("${MW_REL_PATH}" "${IN_MODULE_NAME}")
+    ModuleInit("${MW_REL_PATH}" "${IN_MODULE_NAME}${MW_APP_SUFFIX}")
 
 endfunction()
 
 
 # ------------------------------------------------------------------------------
-# Function: Mw_ModuleHandler_ThirdPartyWireBuild
+# Function: Mw_ModuleHandler_CoreCMakeListsGenerate
 # Description:
-#   Adds an add_subdirectory() entry for Middlewares/ThirdParty/<Name> ONLY
-#   if that vendored folder actually contains its own CMakeLists.txt - most
-#   third-party libraries do not ship one that fits this project's build
-#   conventions out of the box, in which case the handler folder
-#   (Middlewares/<Name>/, see Mw_ModuleHandler_HandlerFolderInit) is the only
-#   thing wired into the build, and the user is expected to reference the
-#   vendored sources directly from there instead.
+#   (Re)generates Middlewares/Core/CMakeLists.txt from scratch, so it
+#   add_subdirectory()'s every vendored middleware component currently
+#   present under Middlewares/Core/ (a child folder counts only if it
+#   contains a real checkout - its own ".git" file/folder). Mirrors
+#   Bsp_ModuleHandler_McalCMakeListsGenerate for Bsp/Mcal.
 #
-# IN_MODULE_NAME [in]: Middleware component name (e.g. "FreeRTOS").
+#   Only a component that ships its own CMakeLists.txt at the currently
+#   checked-out version gets a real add_subdirectory() line - add_subdirectory()
+#   on a folder without one is a hard configure error. Such a component is
+#   written as a commented-out line instead (with a note), and a WARNING is
+#   printed, so the user sees it and the project still configures.
+#
+#   Also removes any legacy per-component "Core/<Name>" entry from
+#   Middlewares/Middlewares.cmake (written by older versions of this script),
+#   which would otherwise add the same folder twice now that Core/ is
+#   wired as a whole.
+#
+#   Always regenerated (never appended), so it stays in sync with whatever
+#   components/versions are actually checked out - including after a
+#   version switch that adds or drops a component's CMakeLists.txt.
 # ------------------------------------------------------------------------------
-function(Mw_ModuleHandler_ThirdPartyWireBuild IN_MODULE_NAME)
+function(Mw_ModuleHandler_CoreCMakeListsGenerate)
 
-    set(THIRDPARTY_PATH "${PROJECT_ROOT_PATH}/${MW_THIRDPARTY_REL_PATH}/${IN_MODULE_NAME}")
+    set(CORE_ROOT "${PROJECT_ROOT_PATH}/${MW_CORE_REL_PATH}")
+    set(CORE_CMAKE_PATH "${CORE_ROOT}/CMakeLists.txt")
 
-    if(EXISTS "${THIRDPARTY_PATH}/CMakeLists.txt")
-        Mw_ModuleHandler_UpdateCMakeLists("ThirdParty/${IN_MODULE_NAME}")
-    else()
-        message(STATUS "'${IN_MODULE_NAME}' has no CMakeLists.txt of its own under ThirdParty/ - only the handler folder was wired into the build.")
+    file(MAKE_DIRECTORY "${CORE_ROOT}")
+
+    # Collect vendored component folders (sorted for a stable output)
+    file(GLOB CORE_CHILDREN LIST_DIRECTORIES true "${CORE_ROOT}/*")
+    list(SORT CORE_CHILDREN)
+
+    set(CONTENT "# Generated by Mw_ModuleHandler.cmake - DO NOT EDIT, regenerated on every\n")
+    string(APPEND CONTENT "# Middleware configuration/update run.\n")
+
+    set(WIRED_COUNT 0)
+
+    foreach(CHILD_PATH ${CORE_CHILDREN})
+
+        if(NOT IS_DIRECTORY "${CHILD_PATH}" OR NOT EXISTS "${CHILD_PATH}/.git")
+            continue()
+        endif()
+
+        get_filename_component(CHILD_NAME "${CHILD_PATH}" NAME)
+
+        if(EXISTS "${CHILD_PATH}/CMakeLists.txt")
+            string(APPEND CONTENT "add_subdirectory(\${CMAKE_CURRENT_LIST_DIR}/${CHILD_NAME})\n")
+            math(EXPR WIRED_COUNT "${WIRED_COUNT} + 1")
+        else()
+            string(APPEND CONTENT "# add_subdirectory(\${CMAKE_CURRENT_LIST_DIR}/${CHILD_NAME}) - no CMakeLists.txt at the checked-out version\n")
+            message(WARNING "Middleware '${CHILD_NAME}' has no CMakeLists.txt at its checked-out version - it is NOT built from Core/ (listed as a comment in Core/CMakeLists.txt).")
+        endif()
+
+    endforeach()
+
+    if(WIRED_COUNT EQUAL 0)
+        string(APPEND CONTENT "# No vendored middleware component with its own CMakeLists.txt found.\n")
+    endif()
+
+    file(WRITE "${CORE_CMAKE_PATH}" "${CONTENT}")
+
+    message(STATUS "Generated '${MW_CORE_REL_PATH}/CMakeLists.txt' (${WIRED_COUNT} component(s) wired).")
+
+    # --------------------------------------------------
+    # Remove legacy per-component Core/<Name> lines
+    # from Middlewares.cmake (Core/ itself stays).
+    # --------------------------------------------------
+    set(MW_CMAKELIST_PATH "${PROJECT_ROOT_PATH}/${MW_REL_PATH}/Middlewares.cmake")
+
+    if(EXISTS "${MW_CMAKELIST_PATH}")
+
+        file(READ "${MW_CMAKELIST_PATH}" MW_CONTENT)
+
+        # "[$]" and "[(]"/"[)]" match those characters literally without
+        # relying on backslash escapes inside a quoted CMake string.
+        string(REGEX REPLACE "\n?add_subdirectory[(][$][{]CMAKE_CURRENT_LIST_DIR[}]/Core/[^)\n]+[)]" "" MW_NEW_CONTENT "${MW_CONTENT}")
+
+        if(NOT "${MW_NEW_CONTENT}" STREQUAL "${MW_CONTENT}")
+            file(WRITE "${MW_CMAKELIST_PATH}" "${MW_NEW_CONTENT}")
+            message(STATUS "Removed legacy 'Core/<Name>' entries from Middlewares.cmake (Core/ is now wired as a whole).")
+        endif()
+
     endif()
 
 endfunction()
@@ -383,13 +525,15 @@ endfunction()
 #      on the component's OWN repository - see
 #      Mw_ModuleHandler_ResolveVersionRef.
 #   3. The component is added as a GIT submodule under
-#      Middlewares/ThirdParty/<Name> (first time only) and switched to the
+#      Middlewares/Core/<Name> (first time only) and switched to the
 #      resolved version (every time - this is also how an already-added
 #      component's version is CHANGED: run this again with a different
 #      IN_VERSION_ID).
-#   4. The project-side handler folder Middlewares/<Name> is scaffolded
+#   4. The project-side handler folder Middlewares/<Name>App is scaffolded
 #      (first time only, never overwritten afterwards).
-#   5. Both folders are wired into Middlewares/Middlewares.cmake.
+#   5. The handler folder and Core/ are wired into
+#      Middlewares/Middlewares.cmake, and Middlewares/Core/CMakeLists.txt
+#      is regenerated (see Mw_ModuleHandler_CoreCMakeListsGenerate).
 #
 # IN_MODULE_ID  [in]: Middleware component numerical identification (e.g. 1
 #                      for the first component in the catalog).
@@ -416,9 +560,9 @@ function(Mw_ModuleHandler_Config IN_MODULE_ID IN_VERSION_ID)
     message(STATUS "Version '${VERSION_REF}' selected for '${SUB_NAME}'.")
 
     # ------------------------------------------------------
-    # Add git submodule under Middlewares/ThirdParty/<Name>
+    # Add git submodule under Middlewares/Core/<Name>
     # ------------------------------------------------------
-    set(LOCAL_SUB_PATH "${PROJECT_ROOT_PATH}/${MW_THIRDPARTY_REL_PATH}/${SUB_NAME}")
+    set(LOCAL_SUB_PATH "${PROJECT_ROOT_PATH}/${MW_CORE_REL_PATH}/${SUB_NAME}")
 
     if(EXISTS "${LOCAL_SUB_PATH}/.git")
 
@@ -426,12 +570,12 @@ function(Mw_ModuleHandler_Config IN_MODULE_ID IN_VERSION_ID)
 
     else()
 
-        GitHandler_SubmoduleInit(${SUB_URL} "${MW_THIRDPARTY_REL_PATH}/${SUB_NAME}" ${SUB_ACTIVE} SUB_IS_SUBMODULE)
+        GitHandler_SubmoduleInit(${SUB_URL} "${MW_CORE_REL_PATH}/${SUB_NAME}" ${SUB_ACTIVE} SUB_IS_SUBMODULE)
 
         # Ignore submodule changes in parent directory (meaningless for a
         # plain clone fallback - EmBi platform is not itself a GIT repo)
         if(SUB_IS_SUBMODULE)
-            GitHandler_SubmoduleIgnore("${MW_THIRDPARTY_REL_PATH}/${SUB_NAME}" "dirty")
+            GitHandler_SubmoduleIgnore("${MW_CORE_REL_PATH}/${SUB_NAME}" "dirty")
         endif()
 
     endif()
@@ -446,9 +590,9 @@ function(Mw_ModuleHandler_Config IN_MODULE_ID IN_VERSION_ID)
     # ------------------------------------------------------
     Mw_ModuleHandler_HandlerFolderInit(${SUB_NAME})
 
-    Mw_ModuleHandler_UpdateCMakeLists("${SUB_NAME}")
+    Mw_ModuleHandler_UpdateCMakeLists("${SUB_NAME}${MW_APP_SUFFIX}")
 
-    Mw_ModuleHandler_ThirdPartyWireBuild(${SUB_NAME})
+    Mw_ModuleHandler_CoreCMakeListsGenerate()
 
     # Copy the catalog repository's own root files (README.md, LICENSE.md,
     # ...) into the project's Middlewares/ folder, same as the BSP module
@@ -472,11 +616,12 @@ endfunction()
 # Function: Mw_ModuleHandler_Update
 # Description:
 #   Updates a single, already-added middleware component
-#   (Middlewares/ThirdParty/<Name>) to the LATEST GIT tag available on its
+#   (Middlewares/Core/<Name>) to the LATEST GIT tag available on its
 #   own repository (or the latest commit of its default branch, if it still
 #   has no tags). Unlike Mw_ModuleHandler_Config, this never touches the
-#   handler folder or Middlewares.cmake - only the vendored submodule's
-#   checked-out version.
+#   handler folder - only the vendored submodule's checked-out version, after
+#   which Middlewares/Core/CMakeLists.txt is regenerated (the new
+#   version may add or drop the component's own CMakeLists.txt).
 #
 #   If the component was never added yet, nothing is updated - run
 #   "Configure Middleware module" first.
@@ -491,10 +636,10 @@ function(Mw_ModuleHandler_Update IN_MODULE_ID)
     list(GET MODULE_NAMES ${IN_MODULE_ID} SUB_NAME)
     list(GET MODULE_URLS ${IN_MODULE_ID} SUB_URL)
 
-    set(LOCAL_SUB_PATH "${PROJECT_ROOT_PATH}/${MW_THIRDPARTY_REL_PATH}/${SUB_NAME}")
+    set(LOCAL_SUB_PATH "${PROJECT_ROOT_PATH}/${MW_CORE_REL_PATH}/${SUB_NAME}")
 
     if(NOT EXISTS "${LOCAL_SUB_PATH}/.git")
-        message(WARNING "Middleware '${SUB_NAME}' is not initialized yet under '${MW_THIRDPARTY_REL_PATH}' - run 'Configure Middleware module' first.")
+        message(WARNING "Middleware '${SUB_NAME}' is not initialized yet under '${MW_CORE_REL_PATH}' - run 'Configure Middleware module' first.")
         return()
     endif()
 
@@ -503,6 +648,8 @@ function(Mw_ModuleHandler_Update IN_MODULE_ID)
     message(STATUS "Updating '${SUB_NAME}' to latest version '${LATEST_VERSION_REF}'...")
 
     GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${LATEST_VERSION_REF})
+
+    Mw_ModuleHandler_CoreCMakeListsGenerate()
 
     message(STATUS "Middleware '${SUB_NAME}' update complete (version '${LATEST_VERSION_REF}').")
 

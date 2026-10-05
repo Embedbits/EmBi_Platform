@@ -1,0 +1,57 @@
+/**
+ * \author @AUTHOR@
+ * \file Test_@MODULE_NAME@.c
+ * \ingroup @MODULE_NAME@
+ * \brief Unit tests of @MODULE_NAME@ module.
+ *
+ * @MODULE_NAME@.c is compiled unchanged for host. Dependent modules are mocked
+ * by CMock (MOCK_HEADERS in CMakeLists.txt).
+ */
+
+/* ============================= INCLUDES =================================== */
+#include "unity.h"                          /* Unity testing framework        */
+#include "UtCommon.h"                       /* Common helpers of unit tests   */
+#include "@MODULE_NAME@_Port.h"             /* Module under test              */
+/* ============================= TYPEDEFS =================================== */
+
+/* ======================= FORWARD DECLARATIONS ============================= */
+
+/* ========================= SYMBOLIC CONSTANTS ============================= */
+
+/* ============================== MACROS ==================================== */
+
+/* ========================== LOCAL VARIABLES =============================== */
+
+/* ======================= SETUP / TEARDOWN ================================= */
+
+void setUp( void )
+{
+    /* Initialization of every test case (emulated registers, test data, ...) */
+}
+
+
+void tearDown( void )
+{
+    /* Mocks are verified by generated runner */
+}
+
+/* =============================== TESTS ==================================== */
+
+/**
+ * \brief   @MODULE_NAME@_Get_ModuleVersion() returns version of the module.
+ *
+ * \details Reads the module version structure.
+ *
+ * \par Expected results
+ * - Version is 1.0.0 (Major 1, Minor 0, Patch 0).
+ */
+void Ut_@MODULE_NAME@_Get_ModuleVersion_ReturnsVersion( void )
+{
+    @TYPE_NAME@_ModuleVersion_t version = @MODULE_NAME@_Get_ModuleVersion();
+
+    TEST_ASSERT_EQUAL_UINT8( 1u, version.Major );
+    TEST_ASSERT_EQUAL_UINT8( 0u, version.Minor );
+    TEST_ASSERT_EQUAL_UINT8( 0u, version.Patch );
+}
+
+/* ========================== LOCAL FUNCTIONS =============================== */

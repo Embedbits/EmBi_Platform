@@ -132,7 +132,7 @@ Enter version ID (numerical, 0 = Latest):
 
 After both are selected, the setup script:
 - Adds the component as a **Git submodule** under `Middlewares/ThirdParty/<Name>`, checked out at the selected version.
-- Scaffolds a project-side handler folder `Middlewares/<Name>` the **first time only** — this is where your own glue/port code and configuration for the component goes; it is never overwritten by a later re-configuration.
+- Scaffolds a project-side handler folder `Middlewares/<Name>App` (module `<Name>App`, CMake library `<Name>App_Lib` — distinct from the vendored component's names) the **first time only** — this is where your own glue/port code and configuration for the component goes; it is never overwritten by a later re-configuration.
 - Wires both folders into `Middlewares/Middlewares.cmake` via `add_subdirectory()` (the `ThirdParty/<Name>` one only if that vendored folder ships its own `CMakeLists.txt`).
 
 Re-running this option for an already-added component with a different version ID switches that component's `Middlewares/ThirdParty/<Name>` checkout to the newly selected version, without touching your handler folder.

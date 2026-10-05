@@ -8,6 +8,7 @@
 # │
 # ...
 # ├── ArtifactsConfig.txt           (Artifacts configuration file)
+# ├── CMakePresets.json             (Project CMake presets)
 # ├── CMakeLists.txt                (Project root CMake file)
 # └── README.md                     (Project documentation)
 #
@@ -43,6 +44,7 @@ SysConfig_Get_ProjectRootPath(PROJECT_ROOT_PATH)
 #   The necessary files are created with following structure:
 #   Project_Root/
 #   ├── ArtifactsConfig.txt      (Artifacts configuration file)
+#   ├── CMakePresets.json        (Project CMake presets)
 #   └── CMakeLists.txt           (Project root CMake file)
 # ------------------------------------------------------------------------------
 function(ProjectStructureInit_ProjectRootInit)
@@ -58,7 +60,14 @@ function(ProjectStructureInit_ProjectRootInit)
             "${PROJECT_ROOT_PATH}/ArtifactsConfig.txt"
             ONLY_IF_DIFFERENT)
     endif()
-    
+
+    # Presets of MCU targets are added by BSP configuration (Prj_PresetsHandler)
+    if(NOT EXISTS "${PROJECT_ROOT_PATH}/CMakePresets.json")
+        file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/Template_CMakePresets.json.in"
+            "${PROJECT_ROOT_PATH}/CMakePresets.json"
+            ONLY_IF_DIFFERENT)
+    endif()
+
 endfunction()
 
 

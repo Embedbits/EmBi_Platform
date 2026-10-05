@@ -88,6 +88,8 @@ function(RalProcessing_GenerateRalPorts INPUT_DIR_ARG OUTPUT_DIR_ARG)
     set(OUTPUT_FILE "${OUTPUT_DIR}/Stm32.h")
     
     string(TOUPPER "${MODULE_NAME}" MODULE_NAME_UPPER)
+    set(TEMPLATE_FILE_MODULE_NAME "${MODULE_NAME}")
+    set(TEMPLATE_FILE_MODULE_NAME_UPPER "${MODULE_NAME_UPPER}")
     configure_file("${TEMPLATE_FILE}" "${OUTPUT_FILE}" @ONLY)
     
     
@@ -104,6 +106,12 @@ function(RalProcessing_GenerateRalPorts INPUT_DIR_ARG OUTPUT_DIR_ARG)
         set(OUTPUT_FILE "${OUTPUT_DIR}/Stm32_${MODULE_NAME}.h")
         
         string(TOUPPER "${MODULE_NAME}" MODULE_NAME_UPPER)
+        set(MODULE_NAME "${CMAKE_MATCH_1}")
+        set(OUTPUT_FILE "${OUTPUT_DIR}/Stm32_${MODULE_NAME}.h")
+        
+        string(TOUPPER "${MODULE_NAME}" MODULE_NAME_UPPER)
+        set(TEMPLATE_FILE_MODULE_NAME "${MODULE_NAME}")
+        set(TEMPLATE_FILE_MODULE_NAME_UPPER "${MODULE_NAME_UPPER}")
     
         configure_file("${TEMPLATE_FILE}" "${OUTPUT_FILE}" @ONLY)
         message(STATUS "Generated: ${OUTPUT_FILE}")

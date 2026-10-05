@@ -1,0 +1,96 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 25,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "description": "Common build options of all EmBi platform presets",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/Build/${presetName}",
+            "warnings": {
+                "unusedCli": false
+            },
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "DOXYGEN_ENABLED": "OFF"
+            }
+        },
+        {
+            "name": "Debug",
+            "hidden": true,
+            "displayName": "Debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            },
+            "vendor": {
+                "embedbits.com/EmBi": { "buildType": true }
+            }
+        },
+        {
+            "name": "Release",
+            "hidden": true,
+            "displayName": "Release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            },
+            "vendor": {
+                "embedbits.com/EmBi": { "buildType": true }
+            }
+        },
+        {
+            "name": "UnitTest",
+            "hidden": true,
+            "displayName": "Unit tests",
+            "description": "Host based unit tests (Unity + CMock). Host tools replace the artifacts list of project ArtifactsConfig.txt (no ARM toolchain), gcc and ruby artifacts exist for Windows only (system gcc / ruby on Linux / macOS)",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "UnitTest",
+                "ARTIFACTS_HANDLER_REQ_LIST": "ninja;1.12.0;latest,gcc;15.2.0;latest,ruby;latest;latest,unity;latest;latest,cmock;latest;latest"
+            },
+            "vendor": {
+                "embedbits.com/EmBi": { "buildType": true, "testPreset": "UnitTest" }
+            }
+        },
+        {
+            "name": "IntegrationTest",
+            "hidden": true,
+            "displayName": "Integration tests",
+            "description": "Integration tests on board (Unity on target, INTEGRATION_TEST_BOARD selects board pins). ARM toolchain and unity replace the artifacts list of project ArtifactsConfig.txt",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "IntegrationTest",
+                "ARTIFACTS_HANDLER_REQ_LIST": "ninja;1.12.0;latest,gcc-arm-none-eabi;latest;latest,unity;latest;latest,probe-rs;latest;latest"
+            },
+            "vendor": {
+                "embedbits.com/EmBi": { "buildType": true, "testPreset": "IntegrationTest" }
+            }
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "UnitTest",
+            "hidden": true,
+            "output": {
+                "outputOnFailure": true,
+                "outputJUnitFile": "UnitTestResults.xml"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            }
+        },
+        {
+            "name": "IntegrationTest",
+            "hidden": true,
+            "output": {
+                "outputOnFailure": true,
+                "outputJUnitFile": "IntegrationTestResults.xml"
+            },
+            "execution": {
+                "noTestsAction": "error"
+            }
+        }
+    ]
+}

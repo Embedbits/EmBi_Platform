@@ -12,7 +12,9 @@
 # ├── Module.h          (Module core header file)
 # ├── Module_Port.h     (Public interface header file)
 # ├── Module_Types.h    (Public types definitions header file)
-# └── CMakeLists.txt    (Module CMake script) 
+# ├── CMakeLists.txt    (Module CMake script)
+# └── Tests             (Unit and integration tests from template, see
+#                        Test_Handler/TestInit.cmake)
 #
 ################################################################################
 cmake_minimum_required(VERSION 3.21)
@@ -26,6 +28,9 @@ get_filename_component(CMAKELISTS_HANDLER_PATH "${CMAKE_CURRENT_LIST_DIR}/../CMa
 
 # Include CMakeLists.txt handler module
 include("${CMAKELISTS_HANDLER_PATH}")
+
+# Include tests initialization (testing template)
+include("${CMAKE_CURRENT_LIST_DIR}/../Test_Handler/TestInit.cmake")
 
 # Set path to system configuration file
 get_filename_component(SYSTEM_CONFIG_FILE_PATH "${CMAKE_CURRENT_LIST_DIR}/../../SysConfig.cmake" REALPATH)
@@ -143,9 +148,12 @@ function(ModuleInit MODULE_PATH_ARG MODULE_NAME_ARG)
         CMakeLists_Handler_Set_ModuleName("${MODULE_NAME_ARG}")
         
         CMakeLists_Handler_Generate_CMakeLists("${PROJECT_ROOT_PATH}/${MODULE_PATH_ARG}/${MODULE_NAME_ARG}/")
-        
+
     endif()
-    
+
+    # Unit and integration tests of the module from the testing template
+    TestInit("${MODULE_PATH_ARG}" "${MODULE_NAME_ARG}" "ALL")
+
     message(STATUS "Module initialization finish.")
     
 endfunction()

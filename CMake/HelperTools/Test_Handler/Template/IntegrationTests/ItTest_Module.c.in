@@ -1,0 +1,58 @@
+/**
+ * \author @AUTHOR@
+ * \file ItTest_@MODULE_NAME@.c
+ * \ingroup @MODULE_NAME@
+ * \brief Integration tests of @MODULE_NAME@ module on target.
+ *
+ * @MODULE_NAME@ module runs on the target with real dependent modules (no mocks).
+ * Every test case runs after system reset of the target. Target specific code
+ * (entry point, initialization, fault handlers) is in ItTarget_@MODULE_NAME@.c.
+ */
+
+/* ============================= INCLUDES =================================== */
+#include "unity.h"                          /* Unity testing framework        */
+#include "IntegrationTesting.h"             /* Integration testing on target  */
+#include "@MODULE_NAME@_Port.h"             /* Module under test              */
+/* ============================= TYPEDEFS =================================== */
+
+/* ======================= FORWARD DECLARATIONS ============================= */
+
+/* ========================= SYMBOLIC CONSTANTS ============================= */
+
+/* ============================== MACROS ==================================== */
+
+/* ========================== LOCAL VARIABLES =============================== */
+
+/* ======================= SETUP / TEARDOWN ================================= */
+
+void setUp( void )
+{
+    /* Initialization of every test case */
+}
+
+
+void tearDown( void )
+{
+    /* Every test case runs after system reset */
+}
+
+/* =============================== TESTS ==================================== */
+
+/**
+ * \brief   @MODULE_NAME@_Get_ModuleVersion() returns version of the module on target.
+ *
+ * \details Reads the module version structure.
+ *
+ * \par Expected results
+ * - Version is 1.0.0 (Major 1, Minor 0, Patch 0).
+ */
+void It_@MODULE_NAME@_Get_ModuleVersion_ReturnsVersion( void )
+{
+    @TYPE_NAME@_ModuleVersion_t version = @MODULE_NAME@_Get_ModuleVersion();
+
+    TEST_ASSERT_EQUAL_UINT8( 1u, version.Major );
+    TEST_ASSERT_EQUAL_UINT8( 0u, version.Minor );
+    TEST_ASSERT_EQUAL_UINT8( 0u, version.Patch );
+}
+
+/* ========================== LOCAL FUNCTIONS =============================== */

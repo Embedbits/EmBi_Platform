@@ -1,0 +1,20 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 25,
+        "patch": 0
+    },
+    "include": [
+        "EmBi_Platform/CMake/Presets/PlatformPresets.json"
+    ],
+    "configurePresets": [
+        {
+            "name": "project",
+            "hidden": true,
+            "description": "Project specific options inherited by every generated preset (cacheVariables, environment, ...)"
+        }
+    ],
+    "buildPresets": [],
+    "testPresets": []
+}

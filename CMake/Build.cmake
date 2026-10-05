@@ -116,12 +116,24 @@ else()
 endif()  
 
 #================================ MCU build ===================================#
-if (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "Release")
+# "IntegrationTest" is MCU build too - modules are built for target exactly as
+# in firmware, instead of project firmware every registered integration test
+# creates its own test firmware (see IntegrationTesting/IntegrationTesting.cmake).
+if (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "IntegrationTest")
 
     include("${CMAKE_CURRENT_LIST_DIR}/Flags.cmake")
 
     # Build configuration flags (Necessary part before project build)
     set(CMAKE_C_FLAGS                   "${ENABLE_ALL_WARNINGS} ${ENABLE_EXTRA_WARNINGS} ${REMOVE_UNUSED_DATA} ${REMOVE_UNUSED_FUNCTIONS} ${LINKER_NOSYS}")
+
+    if(CMAKE_BUILD_TYPE STREQUAL "IntegrationTest")
+        if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/IntegrationTesting/IntegrationTesting.cmake")
+            # Include integration testing functionality (sets INTEGRATION_TESTING_AVAILABLE)
+            include("${CMAKE_CURRENT_LIST_DIR}/IntegrationTesting/IntegrationTesting.cmake")
+        else()
+            message(FATAL_ERROR "Integration testing module not found.")
+        endif()
+    endif()
 
     # BSP part processing (Needs to be processed first because of MCU configuration)
     if(EXISTS "${CMAKE_SOURCE_DIR}/Bsp/Bsp.cmake")
@@ -156,61 +168,96 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_C_FLAGS                   "${CMAKE_C_FLAGS} -T \"${LINKER_SCRIPT}\" -Wl,-Map=${PROJECT_NAME}.map")
     set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} -T \"${LINKER_SCRIPT}\" -Wl,-Map=${PROJECT_NAME}.map")
 
-    # Create an executable object type
-    add_executable(${CMAKE_PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/Platform.c)
+    if(CMAKE_BUILD_TYPE STREQUAL "IntegrationTest")
 
-    target_compile_definitions(${CMAKE_PROJECT_NAME}
-        INTERFACE
-        USE_HAL_DRIVER                  # Set using of ST's RAL
-        ${TARGET_MCU}                   # Set definition of target MCU
-        $<$<CONFIG:Debug>:DEBUG>        # Set uppercase "DEBUG" if build type is "Debug"
-        $<$<CONFIG:Release>:RELEASE>    # Set uppercase "RELEASE" if build type is "Release"
-        ${CMAKE_BUILD_TYPE}             # Set definition of build type
-    )
+        # Creation of all registered integration test firmwares (no project firmware)
+        IntegrationTesting_Generate()
+
+    else()
+
+        # Create an executable object type
+        add_executable(${CMAKE_PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/Platform.c)
+
+        target_compile_definitions(${CMAKE_PROJECT_NAME}
+            INTERFACE
+            USE_HAL_DRIVER                  # Set using of ST's RAL
+            ${TARGET_MCU}                   # Set definition of target MCU
+            $<$<CONFIG:Debug>:DEBUG>        # Set uppercase "DEBUG" if build type is "Debug"
+            $<$<CONFIG:Release>:RELEASE>    # Set uppercase "RELEASE" if build type is "Release"
+            ${CMAKE_BUILD_TYPE}             # Set definition of build type
+        )
 
 
-    # Link directories setup
-    target_link_directories(${CMAKE_PROJECT_NAME}
-        PRIVATE
-    )
+        # Link directories setup
+        target_link_directories(${CMAKE_PROJECT_NAME}
+            PRIVATE
+        )
 
-    # Add sources to executable
-    target_sources(${PROJECT_NAME}
-        PRIVATE
-    )
+        # Add sources to executable
+        target_sources(${PROJECT_NAME}
+            PRIVATE
+        )
 
-    # Add include paths
-    target_include_directories(${CMAKE_PROJECT_NAME}
-        PRIVATE
-    )
+        # Add include paths
+        target_include_directories(${CMAKE_PROJECT_NAME}
+            PRIVATE
+        )
 
-    # Add project symbols (macros)
-    target_compile_definitions(${CMAKE_PROJECT_NAME}
-        PRIVATE
-    ) 
-    
-    # Add linked libraries
-    target_link_libraries(${CMAKE_PROJECT_NAME}
-        StartUp_Lib
-        BspMain_Lib
-    )
-    
+        # Add project symbols (macros)
+        target_compile_definitions(${CMAKE_PROJECT_NAME}
+            PRIVATE
+        )
+
+        # Add linked libraries
+        target_link_libraries(${CMAKE_PROJECT_NAME}
+            StartUp_Lib
+            BspMain_Lib
+        )
+
+    endif()
+
 #============================ Unit Testing Build ==============================#
 elseif(CMAKE_BUILD_TYPE STREQUAL "UnitTest")
 
     # Configure project modules
     set(PROJECT_INCLUDE_LIST "")
-    
+
     if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/UnitTesting/UnitTesting.cmake")
         # Include unit testing functionality
         include("${CMAKE_CURRENT_LIST_DIR}/UnitTesting/UnitTesting.cmake")
     else()
         message(FATAL_ERROR "Unit testing module not found.")
     endif()
-    
-    find_unit_tests("${CMAKE_SOURCE_DIR}/Application/")
-    find_unit_tests("${CMAKE_SOURCE_DIR}/Middlewares/")
-    find_unit_tests("${CMAKE_SOURCE_DIR}/Bsp/")
+
+    # Modules are processed as in MCU build. Every module registers its unit tests
+    # by UnitTesting_AddPath() (condition UNIT_TESTING_AVAILABLE). Module libraries
+    # are not built for host, only the tests (see UnitTesting_Generate).
+
+    # BSP part processing (MCU dependent, needs TARGET_MCU)
+    if(NOT DEFINED TARGET_MCU)
+        message(STATUS "TARGET_MCU not defined. BSP unit tests will be skipped.")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/Bsp/Bsp.cmake")
+        include("${CMAKE_SOURCE_DIR}/Bsp/Bsp.cmake")
+    else()
+        message(WARNING "BSP module not found. Skipping...")
+    endif()
+
+    # Middlewares part processing
+    if(EXISTS "${CMAKE_SOURCE_DIR}/Middlewares/Middlewares.cmake")
+        include("${CMAKE_SOURCE_DIR}/Middlewares/Middlewares.cmake")
+    else()
+        message(STATUS "Middlewares module not found. Skipping...")
+    endif()
+
+    # Application part processing
+    if(EXISTS "${CMAKE_SOURCE_DIR}/Application/App.cmake")
+        include("${CMAKE_SOURCE_DIR}/Application/App.cmake")
+    else()
+        message(STATUS "Application module not found. Skipping...")
+    endif()
+
+    # Creation of all registered unit tests
+    UnitTesting_Generate()
 
 endif()
 

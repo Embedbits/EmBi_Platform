@@ -1,0 +1,7 @@
+ARTIFACTS_HANDLER_CACHE_PATH=C:\ArtifactsCache
+ARTIFACTS_HANDLER_ROOT_REPO_URL=git@ssh.dev.azure.com:v3/Dlzen/Artifacts/Artifacts
+ninja;1.12.0;latest
+gcc;15.2.0;latest
+ruby;latest;latest
+unity;latest;latest
+cmock;latest;latest

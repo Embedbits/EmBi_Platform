@@ -1,0 +1,33 @@
+# Common configuration of CMock (mock generation) and Unity test runner
+# generator (generate_test_runner.rb). Used by UnitTesting.cmake for every
+# unit test. Project may override it with -DUNIT_TEST_CONFIG_FILE=<path>.
+
+# Mock generator (cmock.rb) options
+:cmock:
+  :mock_prefix: Mock
+  :enforce_strict_ordering: true
+  :treat_externs: :exclude
+  :when_no_prototypes: :warn
+  :plugins:
+    - :ignore
+    - :ignore_arg
+    - :expect_any_args
+    - :array
+    - :callback
+    - :return_thru_ptr
+  :strippables:
+    - '(?:__attribute__\s*\(+.*?\)+)'
+  :treat_as:
+    uint8_t:  HEX8
+    uint16_t: HEX16
+    uint32_t: HEX32
+    int8_t:   INT8
+    int16_t:  INT16
+    int32_t:  INT32
+
+# Test runner generator (generate_test_runner.rb) options
+:unity:
+  :mock_prefix: Mock
+  :cmdline_args: true
+  :enforce_strict_ordering: true
+  :test_prefix: Ut_

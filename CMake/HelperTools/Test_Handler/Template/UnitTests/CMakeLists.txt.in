@@ -1,0 +1,24 @@
+#======================== Unit tests configuration ============================#
+# Unit tests of @MODULE_NAME@ module. Registered in module CMakeLists.txt by
+# UnitTesting_AddPath() and created by UnitTesting_Generate() in "UnitTest"
+# build (see EmBi_Platform/CMake/UnitTesting/README.md).
+#
+# The test set is independent - it lists everything it needs: code under test,
+# mocked headers, host emulation of the target and libraries built for host.
+
+get_filename_component(@MACRO_NAME@_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+
+UnitTesting_Add_Test(
+    NAME            @MODULE_NAME@
+    TEST_SOURCE     Test_@MODULE_NAME@.c
+    UUT_SOURCES     ${@MACRO_NAME@_DIR}/@MODULE_NAME@.c
+    INCLUDE_DIRS    ${@MACRO_NAME@_DIR}
+    # MOCK_HEADERS    <dependent module>_Port.h         # Headers mocked by CMock
+    #
+    # MCU dependent module (peripheral registers, CMSIS, ST LL):
+    # LINK_LIBS       ut_RegMem                         # Registers in host memory at MCU addresses
+    #                 ut_CmsisHost                      # CMSIS core intrinsics on host
+    # FORCE_INCLUDES  ${UNIT_TESTING_CMSIS_HOST_HEADER} # Replaces cmsis_gcc.h (ARM assembler)
+    # HOST_LIBS       Ral_Lib                           # MCU libraries compiled for host
+    # COVERAGE_EXCLUDE ".*/Ral/.*"                      # Code not reported in coverage
+)

@@ -1,0 +1,3 @@
+ARTIFACTS_HANDLER_ROOT_REPO_URL=git@ssh.dev.azure.com:v3/Dlzen/Artifacts/Artifacts
+unity;latest;latest
+cmock;latest;latest

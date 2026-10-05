@@ -51,6 +51,12 @@ get_filename_component(CMAKELISTS_HANDLER_FILE_PATH "${CMAKE_CURRENT_LIST_DIR}/.
 # Include CMakeLists.txt handler module
 include("${CMAKELISTS_HANDLER_FILE_PATH}")
 
+# Set path to project CMake presets handler module
+get_filename_component(PRJ_PRESETS_HANDLER_FILE_PATH "${CMAKE_CURRENT_LIST_DIR}/../Prj_Handler/Prj_PresetsHandler.cmake" REALPATH)
+
+# Include project CMake presets handler module
+include("${PRJ_PRESETS_HANDLER_FILE_PATH}")
+
 # Read BSP repository URL
 SysConfig_Get_BspRepoURL(BSP_REPO_URL)
 
@@ -169,10 +175,30 @@ function(Bsp_ModuleHandler_FolderStructInit)
     endif()
     
     
+    # Bsp.cmake adds Hal in every build (HAL modules can have own integration
+    # tests), only BspMain is skipped in integration test build (entry point of
+    # the test firmware is provided by the test set)
     set(OUTPUT_PATH "${PROJECT_ROOT_PATH}/${BSP_REL_PATH}/Hal/CMakeLists.txt")
-    set(CONTENT "add_subdirectory(\${CMAKE_CURRENT_LIST_DIR}/BspMain)")
+    set(LEGACY_CONTENT "add_subdirectory(\${CMAKE_CURRENT_LIST_DIR}/BspMain)")
+    set(CONTENT
+"# Integration test firmware has own entry point (provided by the test set)
+if(INTEGRATION_TESTING_AVAILABLE STREQUAL \"ON\")
+    message(STATUS \"Integration test build - BspMain is replaced by test firmware, skipping...\")
+else()
+    add_subdirectory(\${CMAKE_CURRENT_LIST_DIR}/BspMain)
+endif()
+")
 
-    if(NOT EXISTS "${OUTPUT_PATH}")
+    if(EXISTS "${OUTPUT_PATH}")
+        # Previous default content (BspMain added also in integration test
+        # build) is updated, user modified file is kept
+        file(READ "${OUTPUT_PATH}" EXISTING_CONTENT)
+        string(STRIP "${EXISTING_CONTENT}" EXISTING_CONTENT)
+
+        if(EXISTING_CONTENT STREQUAL LEGACY_CONTENT)
+            file(WRITE "${OUTPUT_PATH}" "${CONTENT}")
+        endif()
+    else()
         file(WRITE "${OUTPUT_PATH}" "${CONTENT}")
     endif()
     
@@ -558,6 +584,10 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
         endif()
     endforeach()
 
+    # Project root presets - "<MCU>_<build type>" of every MCU of the family
+    # (Bsp/Ral/RalPresets.json of the Ral submodule composed above)
+    Prj_PresetsHandler_Generate()
+
     message(STATUS "Board Support Packages (BSP) module initialization complete.")
 
 endfunction()
@@ -674,6 +704,9 @@ function(Bsp_ModuleHandler_Update)
     else()
         message(STATUS "BSP update complete - ${UPDATED_COUNT} submodule(s) checked.")
     endif()
+
+    # Project root presets follow the MCU list of updated Ral (Bsp/Ral/RalPresets.json)
+    Prj_PresetsHandler_Generate()
 
 endfunction()
 

@@ -1,0 +1,63 @@
+# Azure Pipelines steps template - standalone unit testing of one EmBi module.
+#
+# Usage in module repository (azure-pipelines.yml):
+#
+#   resources:
+#     repositories:
+#       - repository: EmBi_Platform
+#         type: git
+#         name: EmBi_Platform/EmBi_Platform
+#         ref: refs/heads/main
+#
+#   pool:
+#     vmImage: 'ubuntu-latest'
+#
+#   steps:
+#     - template: CMake/UnitTesting/Standalone/azure-pipelines-unittest.yml@EmBi_Platform
+#       parameters:
+#         moduleName: 'ModBus'
+#
+# Hosted Ubuntu agent provides gcc, ruby, cmake and ninja, thus SYSTEM tools are
+# used by default and Unity / CMock are downloaded from GitHub (no SSH key is
+# needed). ARTIFACTS requires SSH access to the artifacts repositories.
+
+parameters:
+  - name: moduleName
+    type: string
+  - name: tools
+    type: string
+    default: 'SYSTEM'
+    values:
+      - 'SYSTEM'
+      - 'ARTIFACTS'
+  - name: platformSubmodules
+    type: boolean
+    default: false
+
+steps:
+  - checkout: EmBi_Platform
+    path: s/EmBi_Platform
+    submodules: ${{ parameters.platformSubmodules }}
+    clean: true
+
+  - checkout: self
+    path: s/${{ parameters.moduleName }}
+    submodules: false
+    clean: true
+
+  - script: >
+      cmake -DMODULE_PATH=${{ parameters.moduleName }}
+      -DTOOLS=${{ parameters.tools }}
+      -DBUILD_DIR=Build_UnitTest
+      -P EmBi_Platform/CMake/UnitTesting/Standalone/RunModuleTests.cmake
+    workingDirectory: $(Pipeline.Workspace)/s
+    displayName: 'Unit tests - ${{ parameters.moduleName }}'
+
+  - task: PublishTestResults@2
+    condition: succeededOrFailed()
+    inputs:
+      testResultsFormat: 'JUnit'
+      testResultsFiles: '$(Pipeline.Workspace)/s/Build_UnitTest/UnitTestResults.xml'
+      failTaskOnFailedTests: true
+      testRunTitle: 'UnitTests_${{ parameters.moduleName }}'
+    displayName: 'Publish unit test results'

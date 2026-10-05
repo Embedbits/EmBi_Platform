@@ -414,7 +414,58 @@ function(GitHandler_SubmoduleInit IN_REPO_URL IN_TARGET_PATH IN_ACTIVE_STATE OUT
 
     endif()
 
-    execute_process(COMMAND git submodule add ${IN_REPO_URL} ${IN_TARGET_PATH}
+    # --------------------------------------------------------------
+    # Submodule already registered (gitlink in the index), but its
+    # working-tree checkout is missing - typically the folder (or a whole
+    # parent like Middlewares/) was deleted by hand. `git submodule add`
+    # would refuse with "already exists in the index", so restore the
+    # checkout from the existing registration instead.
+    # --------------------------------------------------------------
+    set(ADD_FORCE_ARG "")
+
+    execute_process(COMMAND git ls-files --stage -- ${IN_TARGET_PATH}
+                    WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                    OUTPUT_VARIABLE STAGED_ENTRY
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+
+    if("${STAGED_ENTRY}" MATCHES "^160000 ")
+
+        message(STATUS "Submodule '${IN_TARGET_PATH}' is already registered but not checked out - restoring it.")
+
+        execute_process(COMMAND git submodule update --init --force -- ${IN_TARGET_PATH}
+                        WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                        RESULT_VARIABLE RESTORE_RESULT
+                        OUTPUT_QUIET
+                        ERROR_VARIABLE RESTORE_ERROR)
+
+        if(RESTORE_RESULT EQUAL 0 AND EXISTS "${PROJECT_ROOT_PATH}/${IN_TARGET_PATH}/.git")
+            set(${OUT_IS_SUBMODULE} TRUE PARENT_SCOPE)
+            return()
+        endif()
+
+        # Restore failed (e.g. stale/foreign registration) - drop the stale
+        # index + .gitmodules entry and fall through to a fresh add.
+        message(WARNING "Restoring submodule '${IN_TARGET_PATH}' failed, re-adding it. Git said: ${RESTORE_ERROR}")
+
+        execute_process(COMMAND git update-index --force-remove -- ${IN_TARGET_PATH}
+                        WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                        OUTPUT_QUIET ERROR_QUIET)
+        execute_process(COMMAND git config -f .gitmodules --remove-section submodule.${IN_TARGET_PATH}
+                        WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                        OUTPUT_QUIET ERROR_QUIET)
+        execute_process(COMMAND git add .gitmodules
+                        WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                        OUTPUT_QUIET ERROR_QUIET)
+
+        # A leftover .git/modules/<path> git dir would make a plain add
+        # refuse ("A git directory for ... is found locally") - --force
+        # tells it to reuse that directory.
+        set(ADD_FORCE_ARG "--force")
+
+    endif()
+
+    execute_process(COMMAND git submodule add ${ADD_FORCE_ARG} ${IN_REPO_URL} ${IN_TARGET_PATH}
                     WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
                     RESULT_VARIABLE ADD_RESULT
                     OUTPUT_QUIET
@@ -959,6 +1010,10 @@ endfunction()
 #              component that does not (yet) have any GIT tags - see
 #              Mw_ModuleHandler.cmake.
 #
+#              If the remote HEAD symref cannot be read (not every server
+#              advertises it), the conventional default branch names
+#              "main" and then "master" are probed instead.
+#
 # IN_REPO_URL [in]: GIT repository URL to query.
 # OUT_BRANCH [out]: Default branch name, or an empty string if it could not
 #                    be resolved.
@@ -972,13 +1027,69 @@ function(GitHandler_GetDefaultBranch IN_REPO_URL OUT_BRANCH)
 
     string(REGEX MATCH "ref:[ \t]*refs/heads/([^ \t\r\n]+)" _ "${SYMREF_OUTPUT}")
 
-    if(NOT CMAKE_MATCH_1)
-        message(DEBUG "Could not resolve default branch for '${IN_REPO_URL}'")
-        set(${OUT_BRANCH} "" PARENT_SCOPE)
+    if(CMAKE_MATCH_1)
+        set(${OUT_BRANCH} "${CMAKE_MATCH_1}" PARENT_SCOPE)
         return()
     endif()
 
-    set(${OUT_BRANCH} "${CMAKE_MATCH_1}" PARENT_SCOPE)
+    foreach(CANDIDATE_BRANCH main master)
+        GitHandler_RemoteBranchExists(${IN_REPO_URL} ${CANDIDATE_BRANCH} BRANCH_EXISTS)
+        if(BRANCH_EXISTS)
+            set(${OUT_BRANCH} "${CANDIDATE_BRANCH}" PARENT_SCOPE)
+            return()
+        endif()
+    endforeach()
+
+    message(DEBUG "Could not resolve default branch for '${IN_REPO_URL}'")
+    set(${OUT_BRANCH} "" PARENT_SCOPE)
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: GitHandler_ResolveRelativeUrl
+# Description: Resolves a submodule URL declared relative to its parent
+#              repository (e.g. "../ModBus" in .gitmodules) into an absolute
+#              URL, the same way GIT itself does: every leading "../" drops
+#              the last path component of IN_BASE_URL, a leading "./" is
+#              ignored. Both "scheme://host/path" and scp-like
+#              "user@host:path" base URLs are supported. A URL that is not
+#              relative is returned unchanged.
+#
+# IN_BASE_URL  [in]: URL of the parent repository (.gitmodules owner).
+# IN_URL       [in]: Submodule URL as declared in .gitmodules.
+# OUT_URL     [out]: Absolute submodule URL.
+# ------------------------------------------------------------------------------
+function(GitHandler_ResolveRelativeUrl IN_BASE_URL IN_URL OUT_URL)
+
+    if(NOT "${IN_URL}" MATCHES "^\\.\\.?/")
+        set(${OUT_URL} "${IN_URL}" PARENT_SCOPE)
+        return()
+    endif()
+
+    string(REGEX REPLACE "/+$" "" BASE_URL "${IN_BASE_URL}")
+    set(REL_URL "${IN_URL}")
+
+    while(TRUE)
+        if("${REL_URL}" MATCHES "^\\./(.*)$")
+            set(REL_URL "${CMAKE_MATCH_1}")
+        elseif("${REL_URL}" MATCHES "^\\.\\./(.*)$")
+            set(REL_URL "${CMAKE_MATCH_1}")
+            # Drop the last path component, keep its "/" or ":" separator
+            if(NOT "${BASE_URL}" MATCHES "^(.*[/:])[^/:]+$")
+                message(FATAL_ERROR "Cannot resolve relative URL '${IN_URL}' against '${IN_BASE_URL}'.")
+            endif()
+            string(REGEX REPLACE "/+$" "" BASE_URL "${CMAKE_MATCH_1}")
+        else()
+            break()
+        endif()
+    endwhile()
+
+    if("${BASE_URL}" MATCHES ":$")
+        set(${OUT_URL} "${BASE_URL}${REL_URL}" PARENT_SCOPE)
+    else()
+        set(${OUT_URL} "${BASE_URL}/${REL_URL}" PARENT_SCOPE)
+    endif()
 
 endfunction()
 

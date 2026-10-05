@@ -10,15 +10,17 @@ echo 0: Exit
 echo 1. Add module
 echo 2: Add module component
 echo 3: Add module CMake file
-echo 4: Configuration
+echo 4: Add tests to existing module
+echo 5: Configuration
 echo =====================================
-set /p choice=Enter your selection (0-4):
+set /p choice=Enter your selection (0-5):
 
 if "%choice%"=="0" goto END
 if "%choice%"=="1" goto RUN_INIT_MODULE
 if "%choice%"=="2" goto RUN_ADD_COMPONENT
 if "%choice%"=="3" goto RUN_INIT_MODULE_CMAKE
-if "%choice%"=="4" goto INITIALIZATION
+if "%choice%"=="4" goto RUN_INIT_TESTS
+if "%choice%"=="5" goto INITIALIZATION
 
 echo Incorrect selection. Try again.
 pause
@@ -53,6 +55,19 @@ set /p MODULE_PATH=Enter path to your module (relative to project root):
 
 echo Initializing module CMake file...
 cmake -DCMAKE_INIT_MODULE_PATH=%MODULE_PATH% -DCMAKE_INIT_MODULE_NAME=%MODULE_NAME% -P CMake/HelperTools/SwModule_Handler/ModuleCmakeInit.cmake
+pause
+goto MENU
+
+
+:RUN_INIT_TESTS
+cls
+set /p MODULE_NAME=Enter your module name:
+set /p MODULE_PATH=Enter path to your module (relative to project root):
+set TEST_TYPES=ALL
+set /p TEST_TYPES=Enter test types (UT, IT, ALL - default ALL):
+
+echo Initializing module tests...
+cmake -DTEST_INIT_MODULE_PATH=%MODULE_PATH% -DTEST_INIT_MODULE_NAME=%MODULE_NAME% -DTEST_INIT_TYPES=%TEST_TYPES% -P CMake/HelperTools/Test_Handler/TestInit.cmake
 pause
 goto MENU
 
@@ -126,8 +141,12 @@ goto INITIALIZATION
 :RUN_MW_CONFIG
 cls
 cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+set "MODULE_ID="
 set /p MODULE_ID=Enter middleware ID (numerical):
+if "%MODULE_ID%"=="" goto INITIALIZATION
+if "%MODULE_ID%"=="0" goto INITIALIZATION
 cmake -DFUNCTION_ID="VERSION_LIST" -DMODULE_ID=%MODULE_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+set "VERSION_ID=0"
 set /p VERSION_ID=Enter version ID (numerical, 0 = Latest):
 cmake -DFUNCTION_ID="MW_CONFIG" -DMODULE_ID=%MODULE_ID% -DVERSION_ID=%VERSION_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
 pause
@@ -137,7 +156,10 @@ goto INITIALIZATION
 :RUN_MW_UPDATE
 cls
 cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+set "MODULE_ID="
 set /p MODULE_ID=Enter middleware ID to update (numerical):
+if "%MODULE_ID%"=="" goto INITIALIZATION
+if "%MODULE_ID%"=="0" goto INITIALIZATION
 cmake -DFUNCTION_ID="MW_UPDATE" -DMODULE_ID=%MODULE_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
 pause
 goto INITIALIZATION

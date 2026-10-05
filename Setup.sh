@@ -13,15 +13,17 @@ menu() {
     echo "1. Add module"
     echo "2: Add module component"
     echo "3: Add module CMake file"
-    echo "4: Configuration"
+    echo "4: Add tests to existing module"
+    echo "5: Configuration"
     echo "====================================="
-    read -p "Enter your selection (0-4): " choice
+    read -p "Enter your selection (0-5): " choice
     case "$choice" in
         0) end ;;
         1) run_init_module ;;
         2) run_add_component ;;
         3) run_init_module_cmake ;;
-        4) initialization ;;
+        4) run_init_tests ;;
+        5) initialization ;;
         *)
             echo "Incorrect selection. Try again."
             pause
@@ -55,6 +57,17 @@ run_init_module_cmake() {
     read -p "Enter path to your module (relative to project root): " MODULE_PATH
     echo "Initializing module CMake file..."
     cmake -DCMAKE_INIT_MODULE_PATH="$MODULE_PATH" -DCMAKE_INIT_MODULE_NAME="$MODULE_NAME" -P CMake/HelperTools/SwModule_Handler/ModuleCmakeInit.cmake
+    pause
+    menu
+}
+
+run_init_tests() {
+    clear
+    read -p "Enter your module name: " MODULE_NAME
+    read -p "Enter path to your module (relative to project root): " MODULE_PATH
+    read -p "Enter test types (UT, IT, ALL - default ALL): " TEST_TYPES
+    echo "Initializing module tests..."
+    cmake -DTEST_INIT_MODULE_PATH="$MODULE_PATH" -DTEST_INIT_MODULE_NAME="$MODULE_NAME" -DTEST_INIT_TYPES="${TEST_TYPES:-ALL}" -P CMake/HelperTools/Test_Handler/TestInit.cmake
     pause
     menu
 }
@@ -125,8 +138,13 @@ run_mw_config() {
     clear
     cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
     read -p "Enter middleware ID (numerical): " MODULE_ID
+    if [ -z "$MODULE_ID" ] || [ "$MODULE_ID" = "0" ]; then
+        initialization
+        return
+    fi
     cmake -DFUNCTION_ID="VERSION_LIST" -DMODULE_ID="$MODULE_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
     read -p "Enter version ID (numerical, 0 = Latest): " VERSION_ID
+    VERSION_ID="${VERSION_ID:-0}"
     cmake -DFUNCTION_ID="MW_CONFIG" -DMODULE_ID="$MODULE_ID" -DVERSION_ID="$VERSION_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
     pause
     initialization
@@ -136,6 +154,10 @@ run_mw_update() {
     clear
     cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
     read -p "Enter middleware ID to update (numerical): " MODULE_ID
+    if [ -z "$MODULE_ID" ] || [ "$MODULE_ID" = "0" ]; then
+        initialization
+        return
+    fi
     cmake -DFUNCTION_ID="MW_UPDATE" -DMODULE_ID="$MODULE_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
     pause
     initialization

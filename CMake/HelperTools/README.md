@@ -11,13 +11,14 @@ After script execution the main menu looks like this:
 
 ```
 =====================================
-1. Create module
-2: Add component
-3: Add CMake file
-4: Initialization
-5: Exit
+0: Exit
+1. Add module
+2: Add module component
+3: Add module CMake file
+4: Add tests to existing module
+5: Configuration
 =====================================
-Enter your selection (1-5):
+Enter your selection (0-5):
 ```
 
 Note: The actual menu may vary based on the specific implementation and available scripts.
@@ -37,7 +38,8 @@ ModuleName/
 ├─ ModuleName_Port.h
 ├─ ModuleName_Types.h
 ├─ ModuleName.c
-└─ ModuleName.h
+├─ ModuleName.h
+└─ Tests/                        - Unit and integration tests (see Add tests)
 ```
 
 #### CMakeLists.txt
@@ -88,6 +90,37 @@ ModuleName/
 ## Add CMake file
 
 This option allows user to create or update the CMakeLists.txt file for a specific module.
+
+---
+
+## Add tests
+
+This option copies the testing template (`Test_Handler/Template`) into an existing module - unit
+tests (`UT`), integration tests (`IT`) or both (`ALL`). "Create module" calls the same script
+(`Test_Handler/TestInit.cmake`), so every new module has its tests from the start. Existing files
+are never overwritten, registration of the tests (`UnitTesting_AddPath`,
+`IntegrationTesting_AddPath`) is added to `CMakeLists.txt` of the module if missing.
+
+The testing frameworks (`UnitTesting`, `IntegrationTesting`) are independent of the target - every
+test set lists and initializes everything it needs itself:
+
+```
+ModuleName/Tests/
+├─ UnitTests/
+│  ├─ CMakeLists.txt             - UnitTesting_Add_Test (mocks, target emulation, HOST_LIBS)
+│  └─ Test_ModuleName.c          - Unity test cases on host
+└─ IntegrationTests/
+   ├─ CMakeLists.txt             - IntegrationTesting_Add_Test (all libraries of the firmware)
+   ├─ ItTest_ModuleName.c        - Unity test cases on target
+   ├─ ItTarget_ModuleName.c      - Target interface: entry point, init, debug freeze, faults, reset
+   └─ BspMain.h                  - Entry point called by StartUp
+```
+
+Direct call:
+
+```bash
+cmake -DTEST_INIT_MODULE_PATH=Bsp/Mcal -DTEST_INIT_MODULE_NAME=Gpio -DTEST_INIT_TYPES=IT -P CMake/HelperTools/Test_Handler/TestInit.cmake
+```
 
 ---
 
