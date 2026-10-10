@@ -91,8 +91,9 @@ initialization() {
     echo "7: Middleware module - Update version"
     echo "8: Documents module - Configuration"
     echo "9: Module update (Updater)"
+    echo "10: Artifacts (artifacts handler)"
     echo "====================================="
-    read -p "Enter your selection (0-9): " choice
+    read -p "Enter your selection (0-10): " choice
     case "$choice" in
         0) menu ;;
         1) run_init_project ;;
@@ -104,6 +105,7 @@ initialization() {
         7) run_mw_update ;;
         8) run_docs_init ;;
         9) run_module_update ;;
+        10) artifacts_menu ;;
         *)
             echo "Incorrect selection. Try again."
             pause
@@ -301,6 +303,62 @@ run_module_update() {
           -DUPDATE_COMMIT_MESSAGE="$COMMIT_MESSAGE" -DUPDATE_PUSH="$UPDATE_PUSH" -P CMake/Updater/Updater.cmake
     pause
     initialization
+}
+
+artifacts_menu() {
+    clear
+    echo "====================================="
+    echo "0: Back to configuration menu"
+    echo "1: Install artifacts of ArtifactsConfig.txt"
+    echo "2: Install one artifact"
+    echo "3: Show artifacts (configuration, cache folder, installed versions)"
+    echo "====================================="
+    read -p "Enter your selection (0-3): " choice
+    case "$choice" in
+        0) initialization ;;
+        1) run_artifacts_install ;;
+        2) run_artifacts_install_one ;;
+        3) run_artifacts_show ;;
+        *)
+            echo "Incorrect selection. Try again."
+            pause
+            artifacts_menu
+            ;;
+    esac
+}
+
+run_artifacts_install() {
+    clear
+    read -p "Offline mode - check the local cache only, no download (y/N): " OFFLINE_ANSWER
+    OFFLINE="OFF"
+    if [ "$OFFLINE_ANSWER" = "y" ] || [ "$OFFLINE_ANSWER" = "Y" ]; then
+        OFFLINE="ON"
+    fi
+    cmake -DFUNCTION_ID="INSTALL" -DOFFLINE="$OFFLINE" -P CMake/HelperTools/Artifacts_Handler/Artifacts_Menu.cmake
+    pause
+    artifacts_menu
+}
+
+run_artifacts_install_one() {
+    clear
+    read -p "Enter artifact name (e.g. ninja, empty = back): " ARTIFACT_NAME
+    if [ -z "$ARTIFACT_NAME" ]; then
+        artifacts_menu
+        return
+    fi
+    read -p "Enter Bin version (X.Y.Z, empty = latest): " ARTIFACT_BIN_VERSION
+    read -p "Enter Core version (X.Y.Z, empty = latest): " ARTIFACT_CORE_VERSION
+    cmake -DFUNCTION_ID="INSTALL_ONE" -DARTIFACT_NAME="$ARTIFACT_NAME" -DARTIFACT_BIN_VERSION="$ARTIFACT_BIN_VERSION" \
+          -DARTIFACT_CORE_VERSION="$ARTIFACT_CORE_VERSION" -P CMake/HelperTools/Artifacts_Handler/Artifacts_Menu.cmake
+    pause
+    artifacts_menu
+}
+
+run_artifacts_show() {
+    clear
+    cmake -DFUNCTION_ID="SHOW" -P CMake/HelperTools/Artifacts_Handler/Artifacts_Menu.cmake
+    pause
+    artifacts_menu
 }
 
 end() {

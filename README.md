@@ -106,7 +106,8 @@ Enter the corresponding number of your desired MCU family (e.g., `0` for the STM
 
 After the MCU family is selected, the setup script automatically:
 - Adds all required **BSP submodules**
-- Checks out the correct **branches and commits**
+- Checks out the correct **branches and commits** - every submodule follows the branch of the commit the BSP family pins
+- Composes **Bsp/Mcal** from the peripheral repositories (Rcc, Gpio, ...) of the Mcal branch of the same name - or, when Mcal has no such branch, of the Mcal branch the BSP family pins, so a family can use the Mcal of another one (e.g. BSP `Releases/STM32H7RS` uses Mcal `Releases/STM32H7`)
 - Updates **CMake configurations** for the selected MCU family
 
 #### Option: `Update documents module`

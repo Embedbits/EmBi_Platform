@@ -16,9 +16,15 @@
 #include <windows.h>                        /* VirtualAlloc / VirtualFree     */
 #else
 #include <sys/mman.h>                       /* mmap / madvise / munmap        */
+#include <unistd.h>                         /* sysconf                        */
+#if defined(__linux__)
+#include <sys/resource.h>                   /* setpriority                    */
+#include <sys/syscall.h>                    /* SYS_gettid                     */
+#endif
 #endif
 #include <pthread.h>                        /* HW model thread                */
 #include <sched.h>                          /* sched_yield                    */
+#include <stdbool.h>                        /* bool                           */
 /* ============================= TYPEDEFS =================================== */
 
 /** Emulated memory region configuration structure */
@@ -68,6 +74,14 @@ static void *                regMem_ModelThread      ( void *arg );
 
 /** HW model cycles finished before \ref RegMem_Set_ModelActive returns */
 #define REGMEM_MODEL_STARTUP_CYCLES     ( 2u )
+
+/** Count of logical processors from which the HW model thread spins (higher priority on Windows) */
+#define REGMEM_MODEL_SPIN_MIN_CPUS      ( 2u )
+
+#if defined(__linux__)
+/** Nice value requested for the HW model thread (not permitted without privileges - ignored then) */
+#define REGMEM_MODEL_NICE               ( -5 )
+#endif
 
 #if !defined(_WIN32) && !defined(MAP_FIXED_NOREPLACE)
 /** Linux < 4.17 headers: flag is then used only as hint, result is checked */
@@ -298,6 +312,35 @@ regMem_RequestState_t RegMem_Set_ModelInactive( void )
     return ( retState );
 }
 
+/**
+ * \brief Waits until the HW model finishes whole cycles started after the call.
+ *
+ * \details The cycle running at the call may have started before the last register write of
+ *          the caller (it works with an older register snapshot), so cycleCnt + 1 cycles are
+ *          awaited. Intended for stubs called by the module under test in its busy-wait delays.
+ *          A model which is not running is not waited for.
+ *
+ * \param cycleCnt [in]: Count of whole model cycles to be finished after the call
+ *
+ * \return Always \ref REGMEM_REQUEST_OK.
+ */
+regMem_RequestState_t RegMem_Wait_ModelCycles( uint32_t cycleCnt )
+{
+    /* Caller's register write must be visible to the model thread before the cycle count is taken -
+     * a store may otherwise be reordered after the load (store buffer) */
+    __atomic_thread_fence( __ATOMIC_SEQ_CST );
+
+    const uint32_t startCnt = regMem_ModelCycleCnt;
+
+    while( ( REGMEM_MODEL_ACTIVE == regMem_ModelState ) &&
+           ( ( cycleCnt + 1u ) > ( regMem_ModelCycleCnt - startCnt ) ) )
+    {
+        (void)sched_yield();
+    }
+
+    return ( REGMEM_REQUEST_OK );
+}
+
 /* ========================== LOCAL FUNCTIONS =============================== */
 
 /**
@@ -309,7 +352,51 @@ regMem_RequestState_t RegMem_Set_ModelInactive( void )
  */
 static void * regMem_ModelThread( void *arg )
 {
+    bool modelSpin = false;
+
     (void)arg;
+
+#if defined(_WIN32)
+    /* The module under test waits for the flags set by the model in a busy loop of a limited
+     * count of iterations. A model thread which is not scheduled for longer than the loop
+     * takes (the host runs other processes) causes a timeout of the tested function. On a host
+     * with more processors the model therefore runs at a higher priority and spins -
+     * sched_yield() would hand the processor to any ready thread, also of a lower priority,
+     * for a whole quantum. */
+    SYSTEM_INFO sysInfo;
+
+    GetSystemInfo( &sysInfo );
+
+    const DWORD cpuCnt = sysInfo.dwNumberOfProcessors;
+
+    if( REGMEM_MODEL_SPIN_MIN_CPUS <= cpuCnt )
+    {
+        (void)SetThreadPriority( GetCurrentThread(), THREAD_PRIORITY_HIGHEST );
+        modelSpin = true;
+    }
+    else
+    {
+        /* Single processor host - the model yields the processor to the test thread */
+    }
+#else
+    /* Same reasoning as on Windows: sched_yield() on a loaded Linux host (parallel builds and
+     * tests on the agent) gives the model a processor too rarely for the limited busy loops of
+     * the tested module. On a host with more processors the model spins, so it is ready as soon
+     * as it gets a processor, and asks for a better nice value (ignored without privileges). */
+    const long cpuCnt = sysconf( _SC_NPROCESSORS_ONLN );
+
+    if( ( 0 < cpuCnt ) && ( (long)REGMEM_MODEL_SPIN_MIN_CPUS <= cpuCnt ) )
+    {
+#if defined(__linux__)
+        (void)setpriority( PRIO_PROCESS, (id_t)syscall( SYS_gettid ), REGMEM_MODEL_NICE );
+#endif
+        modelSpin = true;
+    }
+    else
+    {
+        /* Single processor host - the model yields the processor to the test thread */
+    }
+#endif /* _WIN32 */
 
     while( REGMEM_MODEL_ACTIVE == regMem_ModelState )
     {
@@ -317,7 +404,26 @@ static void * regMem_ModelThread( void *arg )
 
         regMem_ModelCycleCnt++;
 
-        (void)sched_yield();
+        /* The next cycle must not read the registers before the cycle count is visible to the waiting
+         * thread (store -> load reordering), see RegMem_Wait_ModelCycles */
+        __atomic_thread_fence( __ATOMIC_SEQ_CST );
+
+        if( true == modelSpin )
+        {
+#if defined(_WIN32)
+            YieldProcessor();
+#elif defined(__x86_64__) || defined(__i386__)
+            __builtin_ia32_pause();
+#elif defined(__aarch64__)
+            __asm__ __volatile__( "yield" );
+#else
+            /* Plain spin */
+#endif
+        }
+        else
+        {
+            (void)sched_yield();
+        }
     }
 
     return ( NULL );

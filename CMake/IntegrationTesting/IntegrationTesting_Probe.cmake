@@ -35,14 +35,51 @@
 
 include_guard(GLOBAL)
 
+# Functions of the artifacts handler (cache folder, configuration file); the
+# handler itself is not started by this include. The include is on the level of
+# the script, the functions use the variables set by it.
+set(ARTIFACTS_HANDLER_NO_RUN TRUE)
+include("${CMAKE_CURRENT_LIST_DIR}/../ArtifactsHandler/ArtifactsHandler.cmake")
+unset(ARTIFACTS_HANDLER_NO_RUN)
+
 # Vendor key of EmBi data in CMake presets
 set(IT_PRESETS_VENDOR_KEY               "embedbits.com/EmBi")
+
+#------------------------------------------------------------------------------#
+# Returns the artifacts cache folder of the project, the folder the artifacts
+# handler installs the artifacts into when it is started for the project
+# (IntegrationTesting_InstallProbeRs): ArtifactsHandler_Get_ArtifactsCachePath -
+# CMake parameter or environment variable ARTIFACTS_HANDLER_CACHE_PATH, path of
+# the host operating system in ArtifactsConfig.txt of the project, default cache
+# folder of the handler.
+#
+# CACHE_PATH_VAR [out]: Artifacts cache folder (CMake path)
+# PROJECT_DIR    [in]:  Project root folder
+#------------------------------------------------------------------------------#
+function(IntegrationTesting_Get_ArtifactsCachePath CACHE_PATH_VAR PROJECT_DIR)
+
+    ArtifactsHandler_Get_ArtifactsCachePath("${PROJECT_DIR}/ArtifactsConfig.txt" CACHE_PATH)
+
+    if(CMAKE_HOST_WIN32)
+
+        file(TO_CMAKE_PATH "${CACHE_PATH}" CACHE_PATH)
+
+    else()
+
+        # Unix path is a CMake path already (':' would be taken as a separator)
+
+    endif()
+
+    set(${CACHE_PATH_VAR} "${CACHE_PATH}" PARENT_SCOPE)
+
+endfunction(IntegrationTesting_Get_ArtifactsCachePath)
 
 #------------------------------------------------------------------------------#
 # Finds probe-rs for host scripts executed before configuration of a preset:
 # IT_PROBE_RS / PROBE_RS_EXECUTABLE (parameter or environment), PATH, host
 # configuration of a configured preset (Build/*/IntegrationTesting_Host.cmake),
-# artifacts cache of the project (probe-rs artifact).
+# artifacts cache of the project (probe-rs artifact) - the folder returned by
+# IntegrationTesting_Get_ArtifactsCachePath.
 #
 # PROBE_RS_VAR [out]: probe-rs executable ("" if not found)
 # PROJECT_DIR  [in]:  Project root folder
@@ -76,23 +113,62 @@ function(IntegrationTesting_FindProbeRs PROBE_RS_VAR PROJECT_DIR)
         endforeach()
     endif()
 
-    if(NOT PROBE_RS AND EXISTS "${PROJECT_DIR}/ArtifactsConfig.txt")
-        file(STRINGS "${PROJECT_DIR}/ArtifactsConfig.txt" CACHE_LINE REGEX "^ARTIFACTS_HANDLER_CACHE_PATH=")
-        string(REGEX REPLACE "^ARTIFACTS_HANDLER_CACHE_PATH=" "" ARTIFACTS_CACHE "${CACHE_LINE}")
-        file(TO_CMAKE_PATH "${ARTIFACTS_CACHE}" ARTIFACTS_CACHE)
+    if(NOT PROBE_RS)
+        IntegrationTesting_Get_ArtifactsCachePath(ARTIFACTS_CACHE "${PROJECT_DIR}")
 
-        if(ARTIFACTS_CACHE)
-            file(GLOB CACHED_PROBE_RS "${ARTIFACTS_CACHE}/probe-rs/Bin/*/probe-rs" "${ARTIFACTS_CACHE}/probe-rs/Bin/*/probe-rs.exe")
-            list(SORT CACHED_PROBE_RS COMPARE NATURAL ORDER DESCENDING)
-            if(CACHED_PROBE_RS)
-                list(GET CACHED_PROBE_RS 0 PROBE_RS)
-            endif()
+        file(GLOB CACHED_PROBE_RS "${ARTIFACTS_CACHE}/probe-rs/Bin/*/probe-rs" "${ARTIFACTS_CACHE}/probe-rs/Bin/*/probe-rs.exe")
+        list(SORT CACHED_PROBE_RS COMPARE NATURAL ORDER DESCENDING)
+        if(CACHED_PROBE_RS)
+            list(GET CACHED_PROBE_RS 0 PROBE_RS)
         endif()
     endif()
 
     set(${PROBE_RS_VAR} "${PROBE_RS}" PARENT_SCOPE)
 
 endfunction(IntegrationTesting_FindProbeRs)
+
+#------------------------------------------------------------------------------#
+# Installs the artifact probe-rs by the artifacts handler of the platform (cache
+# of the project: parameter, environment variable, ArtifactsConfig.txt, default cache) and
+# finds it. For host scripts executed before any integration test preset was
+# configured (nothing else installs probe-rs then).
+#
+# PROBE_RS_VAR [out]: probe-rs executable ("" if the installation failed)
+# PROJECT_DIR  [in]:  Project root folder
+#------------------------------------------------------------------------------#
+function(IntegrationTesting_InstallProbeRs PROBE_RS_VAR PROJECT_DIR)
+
+    set(HANDLER "${CMAKE_CURRENT_LIST_DIR}/../ArtifactsHandler/ArtifactsHandler.cmake")
+
+    if(EXISTS "${HANDLER}")
+        message(STATUS "probe-rs not found - installing the artifact probe-rs.")
+
+        # The handler runs in its own process - it does not see the CMake
+        # parameters of this script, so the cache folder parameter is passed on.
+        set(HANDLER_ARGS "-DCONFIG_FILE_PATH=${PROJECT_DIR}")
+
+        if(NOT "${ARTIFACTS_HANDLER_CACHE_PATH}" STREQUAL "")
+            list(APPEND HANDLER_ARGS "-DARTIFACTS_HANDLER_CACHE_PATH=${ARTIFACTS_HANDLER_CACHE_PATH}")
+        else()
+            # Cache folder from the environment variable / ArtifactsConfig.txt
+        endif()
+
+        set(ENV{ARTIFACTS_HANDLER_REQ_LIST} "probe-rs;latest;latest")
+        execute_process(COMMAND           "${CMAKE_COMMAND}" ${HANDLER_ARGS} -P "${HANDLER}"
+                        WORKING_DIRECTORY "${PROJECT_DIR}"
+                        RESULT_VARIABLE   INSTALL_RESULT)
+        unset(ENV{ARTIFACTS_HANDLER_REQ_LIST})
+
+        if(NOT INSTALL_RESULT EQUAL 0)
+            message(WARNING "Installation of the artifact probe-rs failed (${INSTALL_RESULT}).")
+        endif()
+    endif()
+
+    IntegrationTesting_FindProbeRs(PROBE_RS "${PROJECT_DIR}")
+
+    set(${PROBE_RS_VAR} "${PROBE_RS}" PARENT_SCOPE)
+
+endfunction(IntegrationTesting_InstallProbeRs)
 
 
 #------------------------------------------------------------------------------#

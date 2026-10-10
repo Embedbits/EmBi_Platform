@@ -9,5 +9,12 @@ ninja;1.12.0;latest
 gcc-arm-none-eabi;latest;latest
 doxygen;1.17.0;latest
 graphviz;latest;latest
-ARTIFACTS_HANDLER_CACHE_PATH=C:\ArtifactsCache
+# The cache folder (permanent storage of the downloaded artifacts) is set per
+# operating system of the host, the first line found for the host is used.
+# Without a path for the host the default cache folder of the handler is used.
+# The generic ARTIFACTS_HANDLER_CACHE_PATH= line is a fallback, it is ignored
+# on a system, which it is not a path of (C:\... on Linux).
+ARTIFACTS_HANDLER_CACHE_PATH_WIN=C:\ArtifactsCache
+#ARTIFACTS_HANDLER_CACHE_PATH_UNIX=/opt/ArtifactsCache
+#ARTIFACTS_HANDLER_CACHE_PATH_MAC=/Users/me/ArtifactsCache
 ARTIFACTS_HANDLER_ROOT_REPO_URL=https://github.com/Embedbits/Artifacts.git

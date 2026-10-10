@@ -231,8 +231,9 @@ When selected, the script will display a submenu with various initialization opt
 7: Middleware module - Update version
 8: Documents module - Configuration
 9: Module update (Updater)
+10: Artifacts (artifacts handler)
 =====================================
-Enter your selection (0-9):
+Enter your selection (0-10):
 ```
 
 ---
@@ -330,6 +331,41 @@ BSP/                          - Board Support Package
 ├─ Startup/                     - Startup files
 ├─ Docs/                        - BSP documentation
 └─ Bsp.cmake                    - BSP CMake file
+```
+
+---
+
+### Artifacts (artifacts handler)
+
+The build tools of the project (ninja, gcc-arm-none-eabi, doxygen, probe-rs, ...) are artifacts. The artifacts handler
+(`CMake/ArtifactsHandler`, see its README) installs them into the artifacts cache folder, normally as a part of the project
+configuration. This option lets you use the handler directly:
+
+```
+=====================================
+0: Back to configuration menu
+1: Install artifacts of ArtifactsConfig.txt
+2: Install one artifact
+3: Show artifacts (configuration, cache folder, installed versions)
+=====================================
+Enter your selection (0-3):
+```
+
+- **Install artifacts of ArtifactsConfig.txt** - installs (or updates to the latest version) the artifacts listed in `ArtifactsConfig.txt`
+  of the project. *Offline mode* checks only the local cache and downloads nothing (it ends with an error if an artifact is missing).
+- **Install one artifact** - asks for the artifact name, the Bin version and the Core version (`X.Y.Z`, empty = `latest`). The artifact does
+  not have to be listed in `ArtifactsConfig.txt`.
+- **Show artifacts** - prints the configuration file, the root repository, the cache folder with the source it comes from (CMake parameter,
+  environment variable `ARTIFACTS_HANDLER_CACHE_PATH`, `ArtifactsConfig.txt` for the host system or the default folder of the handler)
+  and the required artifacts with the Bin / Core versions installed in the cache.
+
+The project needs `ArtifactsConfig.txt` in its root folder (created by *Project structure initialization*). The actions are in
+`Artifacts_Handler/Artifacts_Menu.cmake` and can be started without the menu:
+
+```bash
+cmake -DFUNCTION_ID="SHOW" -P CMake/HelperTools/Artifacts_Handler/Artifacts_Menu.cmake
+cmake -DFUNCTION_ID="INSTALL" -DOFFLINE=ON -P CMake/HelperTools/Artifacts_Handler/Artifacts_Menu.cmake
+cmake -DFUNCTION_ID="INSTALL_ONE" -DARTIFACT_NAME=ninja -DARTIFACT_BIN_VERSION=1.12.0 -DARTIFACT_CORE_VERSION=latest -P CMake/HelperTools/Artifacts_Handler/Artifacts_Menu.cmake
 ```
 
 ---

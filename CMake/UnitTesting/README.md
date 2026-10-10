@@ -87,7 +87,7 @@ Unit tests of one module can be executed without any project - only EmBi platfor
 module repository are needed (module CI, quick local check):
 
 ```bash
-git clone <EmBi_Platform repository> EmBi_Platform      # --recurse-submodules for TOOLS=ARTIFACTS
+git clone <EmBi_Platform repository> EmBi_Platform
 git clone <module repository> ModBus
 cmake -DMODULE_PATH=ModBus -P EmBi_Platform/CMake/UnitTesting/Standalone/RunModuleTests.cmake
 ```
