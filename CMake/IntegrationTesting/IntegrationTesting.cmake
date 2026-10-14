@@ -31,7 +31,7 @@
 #                           check, download, mailbox access, reset)
 #
 # Optional parameters:
-#   INTEGRATION_TEST_BOARD        - Board name (eg. NUCLEO_H503RB), compile definition
+#   INTEGRATION_TEST_BOARD        - Board name = MCU (eg. STM32H503xB), compile definition
 #                                   IT_BOARD_<name> selects board dependent pins in tests.
 #                                   Parameters of the board are taken from the boards file.
 #   INTEGRATION_TEST_BOARDS_FILE  - Boards file (default Build/IntegrationTestBoards.json -
@@ -60,6 +60,9 @@
 #   INTEGRATION_TEST_TIMEOUT      - Default timeout of test firmware execution [s]
 #   INTEGRATION_TEST_CASE_TIMEOUT - Default timeout of one test case [s], blocked test
 #                                   case is aborted by host (reset of MCU)
+#   INTEGRATION_TEST_OPTIMIZATION - Optimization option of the test firmware (default -O0).
+#                                   Devices with small flash (STM32H7R / STM32H7S: 64 KB) use
+#                                   -Os, the firmware of bigger test sets does not fit at -O0.
 #   INTEGRATION_TEST_RUN_KNOWN_DEFECTS - Execute tests marked by IT_KNOWN_DEFECT
 #
 # Registration in module CMakeLists.txt (same principle as unit tests):
@@ -90,7 +93,7 @@ include_guard(GLOBAL)
 set(INTEGRATION_TESTING_DIR             "${CMAKE_CURRENT_LIST_DIR}")
 
 set(INTEGRATION_TEST_BOARD              ""
-    CACHE STRING                        "Board used for integration tests (eg. NUCLEO_H503RB)")
+    CACHE STRING                        "Board used for integration tests - MCU name (eg. STM32H503xB)")
 
 set(INTEGRATION_TEST_BOARDS_FILE        "${CMAKE_SOURCE_DIR}/Build/IntegrationTestBoards.json"
     CACHE FILEPATH                      "Connected boards (IntegrationTesting_Detect.cmake) - preset, probes and parameters of every board")
@@ -130,8 +133,11 @@ set(INTEGRATION_TEST_CASE_TIMEOUT       "10"
 
 option(INTEGRATION_TEST_RUN_KNOWN_DEFECTS "Execute tests of known defects (IT_KNOWN_DEFECT) instead of ignoring them" OFF)
 
+set(INTEGRATION_TEST_OPTIMIZATION       "${OPTIMIZATION_NONE}"
+    CACHE STRING                        "Optimization option of the test firmware (-O0 default, -Og / -Os for devices with small flash)")
+
 # Build type specific flags (as CMAKE_C_FLAGS_DEBUG) - test firmware is debuggable
-set(CMAKE_C_FLAGS_INTEGRATIONTEST       "${OPTIMIZATION_NONE} ${DEBUG_LEVEL_3}")
+set(CMAKE_C_FLAGS_INTEGRATIONTEST       "${INTEGRATION_TEST_OPTIMIZATION} ${DEBUG_LEVEL_3}")
 set(CMAKE_ASM_FLAGS_INTEGRATIONTEST     "${DEBUG_LEVEL_3}")
 
 #============================= Tools localization =============================#

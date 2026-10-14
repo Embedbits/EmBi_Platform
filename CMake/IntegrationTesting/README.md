@@ -141,26 +141,33 @@ cmake -P EmBi_Platform/CMake/IntegrationTesting/IntegrationTesting_Detect.cmake
 
 ```text
 Connected boards:
-  STM32F4DISCOVERY (STM32F407xG_IntegrationTest): 0483:374b:066B... (ID 0x413, 1024 KB), 0483:374b:0674... (ID 0x413, 1024 KB)
+  STM32F405xG (STM32F405xG_IntegrationTest): 0483:374b:066B... (ID 0x413, 1024 KB), 0483:374b:0674... (ID 0x413, 1024 KB)
 Probes without identified MCU (not used):
   0483:374e:0017... (ID not read)
 ```
 
 A board without override is named by its MCU (eg. `STM32F407xG`). Some MCUs share the ID and flash size
-(STM32F405 / F407 / F415 / F417 xG) - the first one is used and a warning lists the others.
+(STM32F405 / F407 / F415 / F417 xG, STM32G411xB / G431xB / G441xB) - the first one whose device probe-rs knows is used
+(the firmware can be executed, eg. STM32G431xB instead of STM32G411xB), otherwise the first one; a warning lists the others.
+
+> **Note:** boards are always named by their MCU - never by the development board (`NUCLEO_*`, `*DISCOVERY`).
+> Test sets of modules select pins and peripherals of the board by `IT_BOARD_<MCU>` (`INTEGRATION_TEST_BOARD`) and
+> list all MCUs with the same ID and flash size in one block (eg. `IT_BOARD_STM32G471xE` ... `IT_BOARD_STM32G484xE`
+> for NUCLEO-G474RE), so the board works without `IntegrationTestBoards.json`. A test set without a block for the
+> MCU stops with `#error Board of ... integration tests is not defined` - the block is added to the test set.
 
 ### Boards of the project (optional override)
 
-`IntegrationTestBoards.json` in the project root (next to `CMakePresets.json`) names the boards, selects
-their presets and parameters:
+`IntegrationTestBoards.json` in the project root (next to `CMakePresets.json`) is not needed - it only selects
+another MCU of an ambiguous ID, probes or parameters of the boards. Board names stay MCU names:
 
 ```json
 {
     "boards": {
-        "STM32F4DISCOVERY": {
+        "STM32F407xG": {
             "preset": "STM32F407xG_IntegrationTest"
         },
-        "NUCLEO_H503RB": {
+        "STM32H503xB": {
             "preset": "STM32H503xB_IntegrationTest",
             "probes": [ "<serial number of the probe>" ],
             "cacheVariables": {
@@ -173,14 +180,15 @@ their presets and parameters:
 
 - Board with `probes` (probe-rs selectors `VID:PID[:SN]` or serial numbers) gets these probes when they
   are connected - also probes without identified MCU (the MCU is checked before download).
-- Board without `probes` gets all connected probes whose MCU matches its preset - eg. the name of the
-  board (`IT_BOARD_<name>` selects pins in tests) or the MCU of an ambiguous ID.
+- Board without `probes` gets all connected probes whose MCU matches its preset - eg. another MCU of an
+  ambiguous ID (STM32F407xG instead of STM32F405xG); the name of the board selects pins in tests
+  (`IT_BOARD_<name>`).
 - `cacheVariables` are used for parameters which are not set on the command line, in the preset or in
   the cache.
 
 ```bash
 cmake -P EmBi_Platform/CMake/IntegrationTesting/IntegrationTesting_Detect.cmake
-cmake --preset STM32F407xG_IntegrationTest -DINTEGRATION_TEST_BOARD=STM32F4DISCOVERY
+cmake --preset STM32F407xG_IntegrationTest -DINTEGRATION_TEST_BOARD=STM32F407xG
 cmake --build --preset STM32F407xG_IntegrationTest
 ctest --preset STM32F407xG_IntegrationTest    # JUnit: Build/<preset>/IntegrationTestResults.xml
 ```
@@ -200,7 +208,7 @@ Without `unity` artifact (not published yet) - artifacts list without `unity`:
 ```bash
 cmake -S . -B build/it-h503rb -G Ninja -DCMAKE_BUILD_TYPE=IntegrationTest \
       -DARTIFACTS_HANDLER_REQ_LIST="ninja;1.12.0;latest,gcc-arm-none-eabi;latest;latest,probe-rs;latest;latest" \
-      -DTARGET_MCU=STM32H503RBTx -DINTEGRATION_TEST_BOARD=NUCLEO_H503RB -DUNITY_ROOT=<Unity>
+      -DTARGET_MCU=STM32H503RBTx -DINTEGRATION_TEST_BOARD=STM32H503xB -DUNITY_ROOT=<Unity>
 cmake --build build/it-h503rb && ctest --test-dir build/it-h503rb
 ```
 
@@ -234,6 +242,7 @@ Parameters:
 | `INTEGRATION_TEST_OUTPUT_SIZE` | `4096` | Unity output buffer [B] (RAM of the smallest MCU - H503 has 32 KB). |
 | `INTEGRATION_TEST_TIMEOUT` | `60` | Default timeout of all test cases of the firmware [s], `TIMEOUT` of the test overrides it. |
 | `INTEGRATION_TEST_CASE_TIMEOUT` | `10` | Default timeout of one test case [s], `CASE_TIMEOUT` of the test overrides it. |
+| `INTEGRATION_TEST_OPTIMIZATION` | `-O0` | Optimization option of the test firmware. Devices with a small flash need a smaller firmware, e.g. `-Os` for STM32H7R / STM32H7S (64 KB flash: Adc test set 76.7 KB at `-O0`, 41.3 KB at `-Os`). Set it in the hidden preset `project` of `CMakePresets.json` or by `-DINTEGRATION_TEST_OPTIMIZATION=-Os`. |
 | `INTEGRATION_TEST_RUN_KNOWN_DEFECTS` | `OFF` | Execute tests marked by `IT_KNOWN_DEFECT()`. |
 
 Useful:
@@ -322,7 +331,8 @@ Test file:
 #include "IntegrationTesting.h"
 #include "Gpio_Port.h"
 
-#if defined(IT_BOARD_NUCLEO_H503RB) || defined(IT_BOARD_NUCLEO_H533RE)
+#if defined(IT_BOARD_STM32H503xB) || \
+    defined(IT_BOARD_STM32H533xE)
     #define IT_GPIO_FREE_PORT   ( GPIO_PORT_A )
     ...
 #else

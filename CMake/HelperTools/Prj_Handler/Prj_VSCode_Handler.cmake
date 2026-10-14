@@ -498,18 +498,12 @@ function(Prj_VSCode_FindTools)
     # Host gdb - gcc artifact of the unit tests (Windows), PATH
     set(GDB "")
 
-    if(EXISTS "${PROJECT_ROOT_PATH}/ArtifactsConfig.txt")
-        file(STRINGS "${PROJECT_ROOT_PATH}/ArtifactsConfig.txt" CACHE_LINE REGEX "^ARTIFACTS_HANDLER_CACHE_PATH=")
-        string(REGEX REPLACE "^ARTIFACTS_HANDLER_CACHE_PATH=" "" ARTIFACTS_CACHE "${CACHE_LINE}")
-        file(TO_CMAKE_PATH "${ARTIFACTS_CACHE}" ARTIFACTS_CACHE)
+    IntegrationTesting_Get_ArtifactsCachePath(ARTIFACTS_CACHE "${PROJECT_ROOT_PATH}")
 
-        if(ARTIFACTS_CACHE)
-            file(GLOB CACHED_GDB "${ARTIFACTS_CACHE}/gcc/Bin/*/mingw64/bin/gdb.exe")
-            list(SORT CACHED_GDB COMPARE NATURAL ORDER DESCENDING)
-            if(CACHED_GDB)
-                list(GET CACHED_GDB 0 GDB)
-            endif()
-        endif()
+    file(GLOB CACHED_GDB "${ARTIFACTS_CACHE}/gcc/Bin/*/mingw64/bin/gdb.exe")
+    list(SORT CACHED_GDB COMPARE NATURAL ORDER DESCENDING)
+    if(CACHED_GDB)
+        list(GET CACHED_GDB 0 GDB)
     endif()
 
     if(NOT GDB)

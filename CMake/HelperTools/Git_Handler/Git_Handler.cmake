@@ -245,6 +245,127 @@ endfunction()
 # ------------------------------------------------------------------------------
 function(GitHandler_ResolveBranchFromCommit IN_TARGET_PATH IN_COMMIT_ID OUT_BRANCH)
 
+    GitHandler_ListBranchesFromCommit(${IN_TARGET_PATH} ${IN_COMMIT_ID} CONTAINING_BRANCHES)
+
+    set(RESOLVED_BRANCH "")
+
+    if(CONTAINING_BRANCHES)
+        list(GET CONTAINING_BRANCHES 0 RESOLVED_BRANCH)
+    endif()
+
+    set(${OUT_BRANCH} "${RESOLVED_BRANCH}" PARENT_SCOPE)
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: GitHandler_ResolvePreferredBranchFromCommit
+# Description:
+#   Same lookup as GitHandler_ResolveBranchFromCommit, but when several
+#   remote branches contain the commit, the branch is chosen by preference
+#   instead of the first one reported by git (alphabetical - "Dev/..." would
+#   win over "Releases/..." and over "master"):
+#     1. IN_PREFERRED_BRANCH itself, if it contains the commit (BSP
+#        Releases/STM32G4 -> Ral Releases/STM32G4, not Dev/STM32G4),
+#     2. the default branch "master" / "main" (repositories BSP links from
+#        their default branch - Startup - also have version branches such
+#        as Dev/1.0.3 containing the pinned commit),
+#     3. the first branch with the same prefix as IN_PREFERRED_BRANCH (the
+#        part before the first "/", e.g. "Releases" - BSP Releases/STM32H7RS
+#        pins Linker / Mcal of Releases/STM32H7),
+#     4. the first branch reported by git.
+#
+# IN_TARGET_PATH      [in]: Path to the (already cloned) repository.
+# IN_COMMIT_ID        [in]: Commit to resolve the owning branch of.
+# IN_PREFERRED_BRANCH [in]: Preferred branch name (e.g. the selected BSP
+#                            branch), without the "origin/" prefix - may be
+#                            empty (steps 2 and 4 only).
+# OUT_BRANCH         [out]: Resolved branch name (without the "origin/"
+#                            prefix), or an empty string if no remote branch
+#                            contains the commit.
+# ------------------------------------------------------------------------------
+function(GitHandler_ResolvePreferredBranchFromCommit IN_TARGET_PATH IN_COMMIT_ID IN_PREFERRED_BRANCH OUT_BRANCH)
+
+    GitHandler_ListBranchesFromCommit(${IN_TARGET_PATH} ${IN_COMMIT_ID} CONTAINING_BRANCHES)
+
+    set(RESOLVED_BRANCH "")
+
+    if(CONTAINING_BRANCHES)
+
+        list(FIND CONTAINING_BRANCHES "${IN_PREFERRED_BRANCH}" PREFERRED_INDEX)
+
+        if(NOT PREFERRED_INDEX EQUAL -1)
+
+            set(RESOLVED_BRANCH "${IN_PREFERRED_BRANCH}")
+
+        else()
+
+            foreach(DEFAULT_BRANCH "master" "main")
+
+                list(FIND CONTAINING_BRANCHES "${DEFAULT_BRANCH}" DEFAULT_INDEX)
+
+                if(NOT DEFAULT_INDEX EQUAL -1)
+                    set(RESOLVED_BRANCH "${DEFAULT_BRANCH}")
+                    break()
+                endif()
+
+            endforeach()
+
+            string(REGEX MATCH "^[^/]+/" PREFERRED_PREFIX "${IN_PREFERRED_BRANCH}")
+
+            if("${RESOLVED_BRANCH}" STREQUAL "")
+                set(PREFIX_SEARCH TRUE)
+            else()
+                set(PREFIX_SEARCH FALSE)
+            endif()
+
+            if("${PREFERRED_PREFIX}" STREQUAL "")
+                set(PREFIX_SEARCH FALSE)
+            endif()
+
+            if(PREFIX_SEARCH)
+
+                foreach(BRANCH_NAME ${CONTAINING_BRANCHES})
+
+                    string(FIND "${BRANCH_NAME}" "${PREFERRED_PREFIX}" PREFIX_POSITION)
+
+                    if(PREFIX_POSITION EQUAL 0)
+                        set(RESOLVED_BRANCH "${BRANCH_NAME}")
+                        break()
+                    endif()
+
+                endforeach()
+
+            endif()
+
+            if("${RESOLVED_BRANCH}" STREQUAL "")
+                list(GET CONTAINING_BRANCHES 0 RESOLVED_BRANCH)
+            endif()
+
+        endif()
+
+    endif()
+
+    set(${OUT_BRANCH} "${RESOLVED_BRANCH}" PARENT_SCOPE)
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: GitHandler_ListBranchesFromCommit
+# Description:
+#   Returns every remote branch of a (already cloned) repository that
+#   contains a given commit (`git branch -r --contains`), in the order git
+#   reports them, without the "origin/" prefix and without the
+#   `origin/HEAD -> ...` alias line (not a real branch).
+#
+# IN_TARGET_PATH [in]: Path to the (already cloned) repository.
+# IN_COMMIT_ID   [in]: Commit to look up.
+# OUT_BRANCHES  [out]: List of branch names, empty if no remote branch
+#                       contains the commit.
+# ------------------------------------------------------------------------------
+function(GitHandler_ListBranchesFromCommit IN_TARGET_PATH IN_COMMIT_ID OUT_BRANCHES)
+
     # Make sure the commit (and the history of every remote branch) is
     # actually present locally - a fresh/partial clone could otherwise make
     # the --contains lookup below silently find nothing.
@@ -259,16 +380,16 @@ function(GitHandler_ResolveBranchFromCommit IN_TARGET_PATH IN_COMMIT_ID OUT_BRAN
                     OUTPUT_STRIP_TRAILING_WHITESPACE
                     ERROR_QUIET)
 
+    set(BRANCH_NAMES "")
+
     if("${BRANCH_OUTPUT}" STREQUAL "")
         message(DEBUG "No remote branch in '${IN_TARGET_PATH}' contains commit ${IN_COMMIT_ID}")
-        set(${OUT_BRANCH} "" PARENT_SCOPE)
+        set(${OUT_BRANCHES} "" PARENT_SCOPE)
         return()
     endif()
 
     string(REPLACE "\r" "" BRANCH_OUTPUT "${BRANCH_OUTPUT}")
     string(REPLACE "\n" ";" BRANCH_LINES "${BRANCH_OUTPUT}")
-
-    set(RESOLVED_BRANCH "")
 
     foreach(LINE ${BRANCH_LINES})
 
@@ -281,13 +402,62 @@ function(GitHandler_ResolveBranchFromCommit IN_TARGET_PATH IN_COMMIT_ID OUT_BRAN
         endif()
 
         if(LINE MATCHES "^origin/(.+)$")
-            set(RESOLVED_BRANCH "${CMAKE_MATCH_1}")
-            break()
+            list(APPEND BRANCH_NAMES "${CMAKE_MATCH_1}")
         endif()
 
     endforeach()
 
-    set(${OUT_BRANCH} "${RESOLVED_BRANCH}" PARENT_SCOPE)
+    set(${OUT_BRANCHES} "${BRANCH_NAMES}" PARENT_SCOPE)
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: GitHandler_SetTrackedBranch
+# Description:
+#   Records the branch a composed BSP submodule follows (`git config
+#   embi.trackedBranch` of the submodule repository, not versioned). The BSP
+#   update path (Bsp_ModuleHandler_UpdateSubmoduleToLatest) takes it instead
+#   of resolving the branch again from the current commit, which several
+#   branches can contain (Releases/<family> and Dev/<family>, master and a
+#   version branch).
+#
+# IN_TARGET_PATH [in]: Path to the (already cloned) repository.
+# IN_BRANCH      [in]: Branch name (without the "origin/" prefix).
+# ------------------------------------------------------------------------------
+function(GitHandler_SetTrackedBranch IN_TARGET_PATH IN_BRANCH)
+
+    execute_process(COMMAND git config embi.trackedBranch "${IN_BRANCH}"
+                    WORKING_DIRECTORY "${IN_TARGET_PATH}"
+                    RESULT_VARIABLE CONFIG_RESULT
+                    OUTPUT_QUIET
+                    ERROR_QUIET)
+
+    if(NOT CONFIG_RESULT EQUAL 0)
+        message(DEBUG "Failed to record tracked branch '${IN_BRANCH}' in '${IN_TARGET_PATH}'")
+    endif()
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: GitHandler_GetTrackedBranch
+# Description:
+#   Returns the branch recorded by GitHandler_SetTrackedBranch.
+#
+# IN_TARGET_PATH [in]: Path to the (already cloned) repository.
+# OUT_BRANCH    [out]: Recorded branch name, or an empty string if none was
+#                       recorded (submodule composed by an older platform).
+# ------------------------------------------------------------------------------
+function(GitHandler_GetTrackedBranch IN_TARGET_PATH OUT_BRANCH)
+
+    execute_process(COMMAND git config --get embi.trackedBranch
+                    WORKING_DIRECTORY "${IN_TARGET_PATH}"
+                    OUTPUT_VARIABLE TRACKED_BRANCH
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+
+    set(${OUT_BRANCH} "${TRACKED_BRANCH}" PARENT_SCOPE)
 
 endfunction()
 

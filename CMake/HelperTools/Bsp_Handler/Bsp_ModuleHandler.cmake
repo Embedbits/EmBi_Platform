@@ -259,16 +259,81 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
+# Function: Bsp_ModuleHandler_McalBranchResolve
+# Description:
+#   Resolves the Mcal family branch the peripherals are composed from:
+#     1. The selected BSP branch name, when Mcal has a branch of that name
+#        (every family with its own Mcal - unchanged behavior; a "Dev/"
+#        BSP branch keeps composing the "Dev/" peripheral branches).
+#     2. Otherwise the branch of the Mcal commit the selected BSP branch
+#        pins (the same mechanism as for BSP's regular submodules), so a
+#        BSP family can point to the Mcal of another one - e.g. BSP
+#        Releases/STM32H7RS pins Mcal Releases/STM32H7 (the STM32H7 Mcal
+#        modules serve both families, only Ral differs). When several Mcal
+#        branches contain the pinned commit, a branch with the prefix of the
+#        BSP branch ("Releases/" / "Dev/") is preferred - see
+#        GitHandler_ResolvePreferredBranchFromCommit.
+#     3. The selected BSP branch name with a warning, when the pinned commit
+#        can not be resolved (no Mcal pin, commit on no branch).
+#
+# IN_MCAL_REPO_URL      [in]: URL of Mcal's own GIT repository (as declared
+#                              in the BSP repository's .gitmodules).
+# IN_BSP_BRANCH_NAME    [in]: Selected BSP branch (e.g. "Releases/STM32G4").
+# OUT_MCAL_BRANCH_NAME [out]: Mcal family branch to compose the peripherals
+#                              from.
+# ------------------------------------------------------------------------------
+function(Bsp_ModuleHandler_McalBranchResolve IN_MCAL_REPO_URL IN_BSP_BRANCH_NAME OUT_MCAL_BRANCH_NAME)
+
+    set(MCAL_BRANCH_NAME "")
+
+    GitHandler_RemoteBranchExists(${IN_MCAL_REPO_URL} ${IN_BSP_BRANCH_NAME} MCAL_HAS_BSP_BRANCH)
+
+    if(MCAL_HAS_BSP_BRANCH)
+
+        # Family with its own Mcal branch
+        set(MCAL_BRANCH_NAME "${IN_BSP_BRANCH_NAME}")
+
+    else()
+
+        set(MCAL_CACHE_PATH "${CACHE_PATH}/Mcal")
+
+        if(NOT EXISTS "${MCAL_CACHE_PATH}/.git")
+            GitHandler_CloneMin(${IN_MCAL_REPO_URL} ${MCAL_CACHE_PATH})
+        endif()
+
+        # Mcal commit pinned by the selected BSP branch (BSP cache is on it)
+        GitHandler_GetCommitId(${CACHE_PATH} ${IN_BSP_BRANCH_NAME} "Mcal" MCAL_PINNED_COMMIT)
+
+        if(NOT "${MCAL_PINNED_COMMIT}" STREQUAL "")
+            GitHandler_ResolvePreferredBranchFromCommit(${MCAL_CACHE_PATH} ${MCAL_PINNED_COMMIT} ${IN_BSP_BRANCH_NAME} MCAL_BRANCH_NAME)
+        endif()
+
+        if("${MCAL_BRANCH_NAME}" STREQUAL "")
+            message(WARNING "Mcal has no branch '${IN_BSP_BRANCH_NAME}' and the branch of the Mcal commit pinned by BSP could not be resolved - Mcal peripherals are looked up on branch '${IN_BSP_BRANCH_NAME}'.")
+            set(MCAL_BRANCH_NAME "${IN_BSP_BRANCH_NAME}")
+        else()
+            message(STATUS "Mcal has no branch '${IN_BSP_BRANCH_NAME}' - BSP pins Mcal ${MCAL_PINNED_COMMIT} of branch '${MCAL_BRANCH_NAME}', Mcal peripherals are composed from '${MCAL_BRANCH_NAME}'.")
+        endif()
+
+    endif()
+
+    set(${OUT_MCAL_BRANCH_NAME} "${MCAL_BRANCH_NAME}" PARENT_SCOPE)
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
 # Function: Bsp_ModuleHandler_McalPeripheralsInit
 # Description:
 #   Composes the Bsp/Mcal folder out of Mcal's OWN peripheral repositories,
 #   instead of adding the Mcal repository itself as a single GIT submodule.
 #
 #   Mcal's repository is cloned into a scratch cache (never committed as a
-#   project submodule) and switched to the selected family branch. Its
+#   project submodule) and switched to the Mcal family branch (see
+#   Bsp_ModuleHandler_McalBranchResolve). Its
 #   .gitmodules is then read to discover every peripheral repository it
 #   currently declares (e.g. Rcc, Nvic, Gpio, Exti, ...). Each peripheral
-#   repository that also has the selected family branch available is added
+#   repository that also has the Mcal family branch available is added
 #   as its own GIT submodule directly under Bsp/Mcal and checked out at the
 #   LATEST commit of that branch (not a pinned commit) - a peripheral
 #   repository missing the branch is soft-skipped with a warning, it does not
@@ -277,9 +342,10 @@ endfunction()
 #
 # IN_MCAL_REPO_URL [in]: URL of Mcal's own GIT repository (as declared in the
 #                         BSP repository's .gitmodules).
-# IN_BRANCH_NAME   [in]: Selected family branch name (e.g. "STM32G4"), used
-#                         both to select Mcal's own peripheral list and to
-#                         checkout each peripheral repository's latest commit.
+# IN_BRANCH_NAME   [in]: Mcal family branch name (e.g. "Releases/STM32G4"),
+#                         used both to select Mcal's own peripheral list and
+#                         to checkout each peripheral repository's latest
+#                         commit.
 # ------------------------------------------------------------------------------
 function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
 
@@ -375,6 +441,9 @@ function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
                 continue()
             endif()
 
+            # Branch followed by the BSP update path
+            GitHandler_SetTrackedBranch(${LOCAL_MCAL_SUB_PATH} ${IN_BRANCH_NAME})
+
             list(APPEND MCAL_ADDED_MODULES "${MCAL_SUB_NAME}")
 
         endforeach()
@@ -409,8 +478,10 @@ endfunction()
 # family branch before that list is read. BSP's OWN pinned commit for a
 # submodule (its GIT "gitlink", resolved via GitHandler_GetCommitId) is used
 # ONLY as a starting point to discover which branch of the submodule's OWN
-# repository it belongs to (GitHandler_ResolveBranchFromCommit does a
-# `git branch -r --contains` lookup) - it is NEVER checked out directly.
+# repository it belongs to (GitHandler_ResolvePreferredBranchFromCommit does
+# a `git branch -r --contains` lookup and prefers the selected BSP branch
+# name, master / main, then the same Releases/ | Dev/ prefix when several
+# branches contain the commit) - it is NEVER checked out directly.
 # That discovered branch is exactly the one the submodule itself tracks
 # (this repo's submodules declare no explicit `submodule.<name>.branch` in
 # .gitmodules, so it must be derived this way rather than read directly).
@@ -426,10 +497,10 @@ endfunction()
 # its repository is inspected (see Bsp_ModuleHandler_McalPeripheralsInit) and
 # every peripheral repository it currently declares (Rcc, Nvic, Gpio, ...) is
 # added as an individual submodule directly under Bsp/Mcal, each checked out
-# at the LATEST commit of the selected BSP family branch directly (Mcal's own
-# peripherals are composed dynamically, so there is no pinned commit to
-# resolve a branch from - this differs from BSP's other, regular submodules
-# above).
+# at the LATEST commit of the Mcal family branch - the selected BSP branch
+# name when Mcal has it, otherwise the branch of the Mcal commit BSP pins
+# (see Bsp_ModuleHandler_McalBranchResolve), so e.g. BSP Releases/STM32H7RS
+# composes the peripherals of Mcal Releases/STM32H7.
 #
 # IN_BRANCH_ID [in]: Branch numerical identification (e.g. 1 for STM32G4_Dev)
 #-------------------------------------------------------------------------------
@@ -491,17 +562,19 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
             # ------------------------------------------------------
             # Mcal special case: never add Mcal itself as a submodule -
             # compose Bsp/Mcal from its own peripheral repositories
-            # instead (see Bsp_ModuleHandler_McalPeripheralsInit). Mcal
-            # uses BSP's own selected family branch directly, since its
-            # peripherals are composed dynamically and don't declare a
-            # submodule branch of their own - handled before the regular
-            # per-submodule branch lookup below, which does not apply here.
+            # instead (see Bsp_ModuleHandler_McalPeripheralsInit), from
+            # the Mcal family branch (BSP branch name, or the branch of
+            # the Mcal commit BSP pins when Mcal has no such branch - see
+            # Bsp_ModuleHandler_McalBranchResolve) - handled before the
+            # regular per-submodule lookup below, which does not apply here.
             # ------------------------------------------------------
             if("${SUB_NAME}" STREQUAL "Mcal")
 
                 list(APPEND PROCESSED_SUB_NAMES "${SUB_NAME}")
 
-                Bsp_ModuleHandler_McalPeripheralsInit(${SUB_URL} ${BRANCH_NAME})
+                Bsp_ModuleHandler_McalBranchResolve(${SUB_URL} ${BRANCH_NAME} MCAL_BRANCH_NAME)
+
+                Bsp_ModuleHandler_McalPeripheralsInit(${SUB_URL} ${MCAL_BRANCH_NAME})
 
                 continue()
 
@@ -546,18 +619,25 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
             # ------------------------------------------------------
             # Determine which of the submodule's OWN branches its pinned
             # commit belongs to (that is exactly the purpose of a GIT
-            # submodule - it independently tracks its own branch; BSP's
-            # selected family branch name is NEVER applied to it directly),
-            # then always take the LATEST commit of THAT branch instead of
-            # staying pinned at the (possibly old) recorded commit.
+            # submodule - it independently tracks its own branch), then
+            # always take the LATEST commit of THAT branch instead of
+            # staying pinned at the (possibly old) recorded commit. When
+            # several branches contain the commit, the selected BSP branch
+            # name, the default branch (master / main) and a branch with
+            # the same Releases/ | Dev/ prefix are preferred (see
+            # GitHandler_ResolvePreferredBranchFromCommit) - git lists the
+            # branches alphabetically, "Dev/..." before "Releases/...".
+            # The branch is recorded for the BSP update path.
             # ------------------------------------------------------
-            GitHandler_ResolveBranchFromCommit(${LOCAL_SUB_PATH} ${SUB_PINNED_COMMIT} SUB_BRANCH)
+            GitHandler_ResolvePreferredBranchFromCommit(${LOCAL_SUB_PATH} ${SUB_PINNED_COMMIT} ${BRANCH_NAME} SUB_BRANCH)
 
             if("${SUB_BRANCH}" STREQUAL "")
                 message(WARNING "Could not resolve which branch of '${SUB_NAME}' contains its pinned commit - staying at commit ${SUB_PINNED_COMMIT}.")
                 GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${SUB_PINNED_COMMIT})
             else()
+                message(STATUS "'${SUB_NAME}' follows branch '${SUB_BRANCH}' (BSP pins ${SUB_PINNED_COMMIT}).")
                 GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${SUB_BRANCH})
+                GitHandler_SetTrackedBranch(${LOCAL_SUB_PATH} ${SUB_BRANCH})
             endif()
 
         endforeach()
@@ -597,12 +677,13 @@ endfunction()
 # Function: Bsp_ModuleHandler_UpdateSubmoduleToLatest
 # Description:
 #   Updates a single, already-composed submodule checkout to the latest
-#   commit of the SAME branch it is currently on - the branch is discovered
-#   from the submodule's own current HEAD commit (GitHandler_GetHeadCommit +
-#   GitHandler_ResolveBranchFromCommit), exactly the same mechanism
-#   Bsp_ModuleHandler_Config uses the first time a submodule is composed,
-#   just re-applied to whatever commit it is presently sitting at instead
-#   of BSP's pinned commit - no BSP/Mcal cache lookup needed. Used by
+#   commit of the SAME branch it is currently on - the branch recorded when
+#   the submodule was composed (GitHandler_GetTrackedBranch, see
+#   Bsp_ModuleHandler_Config / Bsp_ModuleHandler_McalPeripheralsInit). A
+#   submodule composed by an older platform has no record - its branch is
+#   then discovered from the submodule's own current HEAD commit
+#   (GitHandler_GetHeadCommit + GitHandler_ResolvePreferredBranchFromCommit,
+#   default branch preferred) - no BSP/Mcal cache lookup needed. Used by
 #   Bsp_ModuleHandler_Update for every submodule found under Bsp/.
 #
 # IN_SUBMODULE_PATH [in]: Absolute path to the (already cloned) submodule.
@@ -611,18 +692,26 @@ endfunction()
 # ------------------------------------------------------------------------------
 function(Bsp_ModuleHandler_UpdateSubmoduleToLatest IN_SUBMODULE_PATH IN_LABEL)
 
-    GitHandler_GetHeadCommit(${IN_SUBMODULE_PATH} CURRENT_COMMIT)
-
-    if("${CURRENT_COMMIT}" STREQUAL "")
-        message(WARNING "Could not determine current commit of '${IN_LABEL}' - skipping.")
-        return()
-    endif()
-
-    GitHandler_ResolveBranchFromCommit(${IN_SUBMODULE_PATH} ${CURRENT_COMMIT} SUB_BRANCH)
+    GitHandler_GetTrackedBranch(${IN_SUBMODULE_PATH} SUB_BRANCH)
 
     if("${SUB_BRANCH}" STREQUAL "")
-        message(WARNING "Could not resolve which branch '${IN_LABEL}' is currently on - skipping (stayed at ${CURRENT_COMMIT}).")
-        return()
+
+        GitHandler_GetHeadCommit(${IN_SUBMODULE_PATH} CURRENT_COMMIT)
+
+        if("${CURRENT_COMMIT}" STREQUAL "")
+            message(WARNING "Could not determine current commit of '${IN_LABEL}' - skipping.")
+            return()
+        endif()
+
+        GitHandler_ResolvePreferredBranchFromCommit(${IN_SUBMODULE_PATH} ${CURRENT_COMMIT} "" SUB_BRANCH)
+
+        if("${SUB_BRANCH}" STREQUAL "")
+            message(WARNING "Could not resolve which branch '${IN_LABEL}' is currently on - skipping (stayed at ${CURRENT_COMMIT}).")
+            return()
+        endif()
+
+        GitHandler_SetTrackedBranch(${IN_SUBMODULE_PATH} ${SUB_BRANCH})
+
     endif()
 
     message(STATUS "Updating '${IN_LABEL}' to the latest commit of branch '${SUB_BRANCH}'...")

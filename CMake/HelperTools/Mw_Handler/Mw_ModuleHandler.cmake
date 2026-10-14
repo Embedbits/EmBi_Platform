@@ -49,6 +49,14 @@
 #                                    listed as a comment only, so the
 #                                    project still configures.
 #
+# A vendored component whose own CMakeLists.txt cannot be used (it needs an
+# RTOS port, builds every part of the component, ...) is built by its handler
+# module: the file Middlewares/<Name>App/CoreBuild.cmake (created by the user,
+# never overwritten) defines the sources, options and libraries of the
+# component and is included by the CMakeLists.txt of the handler module.
+# Core/CMakeLists.txt lists such a component as a comment only (the CMake
+# file of the component is not added).
+#
 # User can execute configuration of a Middlewares module through this CMake
 # script.
 #
@@ -96,6 +104,10 @@ set(MW_CORE_REL_PATH "${MW_REL_PATH}/Core")
 # Suffix appended to a component name to form its project-side handler
 # module name (folder, files, CMake library) - e.g. "ModBus" -> "ModBusApp".
 set(MW_APP_SUFFIX "App")
+
+# Name of the file of a handler module which builds its vendored component
+# itself (see the header of this file) - e.g. Middlewares/USBXApp/CoreBuild.cmake.
+set(MW_CORE_BUILD_FILE "CoreBuild.cmake")
 
 # Middlewares (MW) catalog cache path - a clone of the MW_REPO_URL catalog
 # repository itself, NOT where the selected components end up.
@@ -464,6 +476,7 @@ function(Mw_ModuleHandler_CoreCMakeListsGenerate)
     string(APPEND CONTENT "# Middleware configuration/update run.\n")
 
     set(WIRED_COUNT 0)
+    set(HANDLER_BUILT_COUNT 0)
 
     foreach(CHILD_PATH ${CORE_CHILDREN})
 
@@ -472,6 +485,19 @@ function(Mw_ModuleHandler_CoreCMakeListsGenerate)
         endif()
 
         get_filename_component(CHILD_NAME "${CHILD_PATH}" NAME)
+
+        # Component built by its handler module: the handler folder holds
+        # CoreBuild.cmake (included by the handler's CMakeLists.txt) which
+        # defines the sources, options and library of the component. The
+        # CMakeLists.txt of the component is not used (e.g. it requires an RTOS
+        # port or builds every part of the component).
+        set(HANDLER_BUILD_PATH "${PROJECT_ROOT_PATH}/${MW_REL_PATH}/${CHILD_NAME}${MW_APP_SUFFIX}/${MW_CORE_BUILD_FILE}")
+
+        if(EXISTS "${HANDLER_BUILD_PATH}")
+            string(APPEND CONTENT "# ${CHILD_NAME} is built by its handler module (${CHILD_NAME}${MW_APP_SUFFIX}/${MW_CORE_BUILD_FILE}) - the CMakeLists.txt of the component is not used\n")
+            math(EXPR HANDLER_BUILT_COUNT "${HANDLER_BUILT_COUNT} + 1")
+            continue()
+        endif()
 
         if(EXISTS "${CHILD_PATH}/CMakeLists.txt")
             string(APPEND CONTENT "add_subdirectory(\${CMAKE_CURRENT_LIST_DIR}/${CHILD_NAME})\n")
@@ -483,13 +509,13 @@ function(Mw_ModuleHandler_CoreCMakeListsGenerate)
 
     endforeach()
 
-    if(WIRED_COUNT EQUAL 0)
+    if(WIRED_COUNT EQUAL 0 AND HANDLER_BUILT_COUNT EQUAL 0)
         string(APPEND CONTENT "# No vendored middleware component with its own CMakeLists.txt found.\n")
     endif()
 
     file(WRITE "${CORE_CMAKE_PATH}" "${CONTENT}")
 
-    message(STATUS "Generated '${MW_CORE_REL_PATH}/CMakeLists.txt' (${WIRED_COUNT} component(s) wired).")
+    message(STATUS "Generated '${MW_CORE_REL_PATH}/CMakeLists.txt' (${WIRED_COUNT} component(s) wired, ${HANDLER_BUILT_COUNT} built by the handler).")
 
     # --------------------------------------------------
     # Remove legacy per-component Core/<Name> lines

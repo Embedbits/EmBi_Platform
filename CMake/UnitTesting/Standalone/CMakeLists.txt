@@ -78,8 +78,8 @@ endforeach()
 if(UNIT_TEST_TOOLS STREQUAL "ARTIFACTS")
 
     if(NOT EXISTS "${EMBI_PLATFORM_DIR}/CMake/ArtifactsHandler/ArtifactsHandler.cmake")
-        message(FATAL_ERROR "ArtifactsHandler not found. Clone EmBi platform with submodules "
-                            "(git clone --recurse-submodules) or use -DUNIT_TEST_TOOLS=SYSTEM.")
+        message(FATAL_ERROR "ArtifactsHandler not found in ${EMBI_PLATFORM_DIR}/CMake/ArtifactsHandler. "
+                            "Check EMBI_PLATFORM_DIR (the EmBi platform clone) or use -DUNIT_TEST_TOOLS=SYSTEM.")
     endif()
 
     # Host specific tools - gcc, ruby and ninja artifacts are released per OS

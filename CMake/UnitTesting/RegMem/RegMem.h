@@ -89,6 +89,7 @@ regMem_RequestState_t   RegMem_Deinit       ( void );
 
 regMem_RequestState_t   RegMem_Set_ModelActive  ( regMem_ModelCallback_t modelCallback );
 regMem_RequestState_t   RegMem_Set_ModelInactive( void );
+regMem_RequestState_t   RegMem_Wait_ModelCycles ( uint32_t cycleCnt );
 
 #ifdef __cplusplus
 }

@@ -81,9 +81,18 @@ else()
         message(STATUS "MCU_ID: ${MCU_ID}")
         add_definitions(-D"STM32${MCU_ID}")
         
-        # Generation of MCU_FAMILY_ID value (STM32U5xx, STM32F4xx...)
-        string(REGEX MATCH "STM32([A-Z][0-9])" _ ${TARGET_MCU_TEMP})
-        set(MCU_FAMILY_ID "STM32${CMAKE_MATCH_1}xx")
+        # Generation of MCU_FAMILY_ID value (STM32U5xx, STM32F4xx...) - family of the
+        # CMSIS device header, checked against RAL_TARGET_MCU_TYPE of Ral. STM32H7R /
+        # STM32H7S devices are an own family STM32H7RS (stm32h7rsxx.h, Ral STM32H7RS).
+        string(REGEX MATCH "^STM32H7[RS]" MCU_FAMILY_H7RS_MATCH "${TARGET_MCU_TEMP}")
+
+        if(MCU_FAMILY_H7RS_MATCH)
+            set(MCU_FAMILY_ID "STM32H7RSxx")
+        else()
+            string(REGEX MATCH "STM32([A-Z][0-9])" _ ${TARGET_MCU_TEMP})
+            set(MCU_FAMILY_ID "STM32${CMAKE_MATCH_1}xx")
+        endif()
+
         message(STATUS "MCU_FAMILY_ID: ${MCU_FAMILY_ID}")
         add_definitions(-D"${MCU_FAMILY_ID}")
         

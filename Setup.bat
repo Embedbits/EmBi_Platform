@@ -91,8 +91,9 @@ echo 6: Middleware module - Configuration
 echo 7: Middleware module - Update version
 echo 8: Documents module - Configuration
 echo 9: Module update (Updater)
+echo 10: Artifacts (artifacts handler)
 echo =====================================
-set /p choice=Enter your selection (0-9):
+set /p choice=Enter your selection (0-10):
 
 if "%choice%"=="0" goto MENU
 if "%choice%"=="1" goto RUN_INIT_PROJECT
@@ -104,6 +105,7 @@ if "%choice%"=="6" goto RUN_MW_CONFIG
 if "%choice%"=="7" goto RUN_MW_UPDATE
 if "%choice%"=="8" goto RUN_DOCS_INIT
 if "%choice%"=="9" goto RUN_MODULE_UPDATE
+if "%choice%"=="10" goto ARTIFACTS
 
 echo Incorrect selection. Try again.
 pause
@@ -304,6 +306,59 @@ if /i "%PUSH_ANSWER%"=="y" set "UPDATE_PUSH=ON"
 cmake -DFUNCTION_ID="UPDATE" "-DFROM_VERSION_ID=%FROM_VERSION_ID%" "-DTO_VERSION_ID=%TO_VERSION_ID%" "-DMODULE_IDS=%MODULE_IDS%" "-DUPDATE_BRANCHES=%UPDATE_BRANCHES%" "-DUPDATE_MODE=%UPDATE_MODE%" "-DUPDATE_COMMIT_MESSAGE=%COMMIT_MESSAGE%" "-DUPDATE_PUSH=%UPDATE_PUSH%" -P CMake/Updater/Updater.cmake
 pause
 goto INITIALIZATION
+
+
+:ARTIFACTS
+cls
+echo =====================================
+echo 0: Back to configuration menu
+echo 1: Install artifacts of ArtifactsConfig.txt
+echo 2: Install one artifact
+echo 3: Show artifacts (configuration, cache folder, installed versions)
+echo =====================================
+set /p choice=Enter your selection (0-3):
+
+if "%choice%"=="0" goto INITIALIZATION
+if "%choice%"=="1" goto RUN_ARTIFACTS_INSTALL
+if "%choice%"=="2" goto RUN_ARTIFACTS_INSTALL_ONE
+if "%choice%"=="3" goto RUN_ARTIFACTS_SHOW
+
+echo Incorrect selection. Try again.
+pause
+goto ARTIFACTS
+
+
+:RUN_ARTIFACTS_INSTALL
+cls
+set "OFFLINE_ANSWER="
+set /p OFFLINE_ANSWER=Offline mode - check the local cache only, no download (y/N):
+set "OFFLINE=OFF"
+if /i "%OFFLINE_ANSWER%"=="y" set "OFFLINE=ON"
+cmake -DFUNCTION_ID="INSTALL" "-DOFFLINE=%OFFLINE%" -P CMake/HelperTools/Artifacts_Handler/Artifacts_Menu.cmake
+pause
+goto ARTIFACTS
+
+
+:RUN_ARTIFACTS_INSTALL_ONE
+cls
+set "ARTIFACT_NAME="
+set /p ARTIFACT_NAME=Enter artifact name (e.g. ninja, empty = back):
+if "%ARTIFACT_NAME%"=="" goto ARTIFACTS
+set "ARTIFACT_BIN_VERSION="
+set /p ARTIFACT_BIN_VERSION=Enter Bin version (X.Y.Z, empty = latest):
+set "ARTIFACT_CORE_VERSION="
+set /p ARTIFACT_CORE_VERSION=Enter Core version (X.Y.Z, empty = latest):
+cmake -DFUNCTION_ID="INSTALL_ONE" "-DARTIFACT_NAME=%ARTIFACT_NAME%" "-DARTIFACT_BIN_VERSION=%ARTIFACT_BIN_VERSION%" "-DARTIFACT_CORE_VERSION=%ARTIFACT_CORE_VERSION%" -P CMake/HelperTools/Artifacts_Handler/Artifacts_Menu.cmake
+pause
+goto ARTIFACTS
+
+
+:RUN_ARTIFACTS_SHOW
+cls
+cmake -DFUNCTION_ID="SHOW" -P CMake/HelperTools/Artifacts_Handler/Artifacts_Menu.cmake
+pause
+goto ARTIFACTS
+
 
 :END
 echo Exiting...

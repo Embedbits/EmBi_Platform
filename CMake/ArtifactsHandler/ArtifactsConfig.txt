@@ -1,0 +1,19 @@
+# Default configuration of artifacts list. The list of available 
+# artifacts can be found in artifacts root repository. Then the
+# user can name any of the artifacts (submodules) and specify version 
+# for Binary part (first number after artifact name) and Core part
+# version (second number after name). The versions and names are 
+# separated by ';'. 
+
+ninja;1.12.0;latest
+gcc-arm-none-eabi;latest;latest
+doxygen;latest;latest
+# The cache folder (permanent storage of the downloaded artifacts) is set per
+# operating system of the host, the first line found for the host is used.
+# Without a path for the host the default cache folder of the handler is used.
+# The generic ARTIFACTS_HANDLER_CACHE_PATH= line is a fallback, it is ignored
+# on a system, which it is not a path of (C:\... on Linux).
+ARTIFACTS_HANDLER_CACHE_PATH_WIN=C:\ArtifactsCache
+#ARTIFACTS_HANDLER_CACHE_PATH_UNIX=/opt/ArtifactsCache
+#ARTIFACTS_HANDLER_CACHE_PATH_MAC=/Users/me/ArtifactsCache
+ARTIFACTS_HANDLER_ROOT_REPO_URL=https://github.com/Embedbits/Artifacts.git
