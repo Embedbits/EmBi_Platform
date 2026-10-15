@@ -75,16 +75,48 @@ function(IntegrationTesting_Get_ArtifactsCachePath CACHE_PATH_VAR PROJECT_DIR)
 endfunction(IntegrationTesting_Get_ArtifactsCachePath)
 
 #------------------------------------------------------------------------------#
-# Finds probe-rs for host scripts executed before configuration of a preset:
-# IT_PROBE_RS / PROBE_RS_EXECUTABLE (parameter or environment), PATH, host
-# configuration of a configured preset (Build/*/IntegrationTesting_Host.cmake),
-# artifacts cache of the project (probe-rs artifact) - the folder returned by
-# IntegrationTesting_Get_ArtifactsCachePath.
+# Returns the configure preset whose configuration defines the probe-rs artifact
+# (ARTIFACTS_HANDLER_REQ_LIST of the integration test preset): the preset of the
+# MCU, without the MCU the first integration test preset of the project.
+#
+# PRESET_VAR  [out]: Preset ("" if the project has no integration test preset -
+#                    ArtifactsConfig.txt of the project is used then)
+# PROJECT_DIR [in]:  Project root folder
+# MCU         [in]:  MCU ("" = any)
+#------------------------------------------------------------------------------#
+function(IntegrationTesting_Get_ProbeRsPreset PRESET_VAR PROJECT_DIR MCU)
+
+    ArtifactsResolver_Find_Preset(PRESET "${PROJECT_DIR}" "_IntegrationTest" "${MCU}")
+
+    set(${PRESET_VAR} "${PRESET}" PARENT_SCOPE)
+
+endfunction(IntegrationTesting_Get_ProbeRsPreset)
+
+#------------------------------------------------------------------------------#
+# Finds probe-rs for host scripts executed outside of the configuration of a
+# preset: IT_PROBE_RS / PROBE_RS_EXECUTABLE (parameter or environment - explicit
+# path chosen by the user), otherwise the probe-rs artifact of the artifacts
+# cache in the version configured for the integration test preset of the MCU
+# (ArtifactsResolver_Get_BinDir) - never the newest cached version and never
+# probe-rs installed in the system (PATH). The artifact is downloaded by
+# IntegrationTesting_InstallProbeRs when it is not cached.
 #
 # PROBE_RS_VAR [out]: probe-rs executable ("" if not found)
 # PROJECT_DIR  [in]:  Project root folder
+# MCU          [in]:  MCU, optional (the preset of the MCU defines the version,
+#                     without it the first integration test preset of the project)
 #------------------------------------------------------------------------------#
 function(IntegrationTesting_FindProbeRs PROBE_RS_VAR PROJECT_DIR)
+
+    # Optional MCU (ARGV2 of a function called without the argument is inherited from the
+    # caller, ARGC is not)
+    set(MCU "")
+
+    if(ARGC GREATER 2)
+        set(MCU "${ARGV2}")
+    else()
+        # No MCU - the first integration test preset of the project defines the version
+    endif()
 
     set(PROBE_RS "")
 
@@ -96,31 +128,24 @@ function(IntegrationTesting_FindProbeRs PROBE_RS_VAR PROJECT_DIR)
     endforeach()
 
     if(NOT PROBE_RS)
-        find_program(IT_PROBE_RS_FOUND NAMES probe-rs NO_CACHE)
-        if(IT_PROBE_RS_FOUND)
-            set(PROBE_RS "${IT_PROBE_RS_FOUND}")
+
+        IntegrationTesting_Get_ProbeRsPreset(PRESET "${PROJECT_DIR}" "${MCU}")
+        ArtifactsResolver_Get_BinDir(BIN_DIR RECORD "${PROJECT_DIR}" "${PRESET}" probe-rs)
+
+        if(BIN_DIR)
+
+            file(GLOB_RECURSE PROBE_RS_FILES "${BIN_DIR}/*probe-rs" "${BIN_DIR}/*probe-rs.exe")
+            list(FILTER PROBE_RS_FILES INCLUDE REGEX "/probe-rs(\\.exe)?$")
+
+            foreach(PROBE_RS_FILE IN LISTS PROBE_RS_FILES)
+                if(NOT IS_DIRECTORY "${PROBE_RS_FILE}")
+                    set(PROBE_RS "${PROBE_RS_FILE}")
+                    break()
+                endif()
+            endforeach()
+
         endif()
-    endif()
 
-    if(NOT PROBE_RS)
-        file(GLOB HOST_CONFIGS "${PROJECT_DIR}/Build/*/IntegrationTesting_Host.cmake")
-        foreach(HOST_CONFIG IN LISTS HOST_CONFIGS)
-            file(STRINGS "${HOST_CONFIG}" PROBE_RS_LINE REGEX "^set\\(IT_PROBE_RS ")
-            if(PROBE_RS_LINE MATCHES "\\[==\\[(.+)\\]==\\]" AND EXISTS "${CMAKE_MATCH_1}")
-                set(PROBE_RS "${CMAKE_MATCH_1}")
-                break()
-            endif()
-        endforeach()
-    endif()
-
-    if(NOT PROBE_RS)
-        IntegrationTesting_Get_ArtifactsCachePath(ARTIFACTS_CACHE "${PROJECT_DIR}")
-
-        file(GLOB CACHED_PROBE_RS "${ARTIFACTS_CACHE}/probe-rs/Bin/*/probe-rs" "${ARTIFACTS_CACHE}/probe-rs/Bin/*/probe-rs.exe")
-        list(SORT CACHED_PROBE_RS COMPARE NATURAL ORDER DESCENDING)
-        if(CACHED_PROBE_RS)
-            list(GET CACHED_PROBE_RS 0 PROBE_RS)
-        endif()
     endif()
 
     set(${PROBE_RS_VAR} "${PROBE_RS}" PARENT_SCOPE)
@@ -128,47 +153,88 @@ function(IntegrationTesting_FindProbeRs PROBE_RS_VAR PROJECT_DIR)
 endfunction(IntegrationTesting_FindProbeRs)
 
 #------------------------------------------------------------------------------#
-# Installs the artifact probe-rs by the artifacts handler of the platform (cache
-# of the project: parameter, environment variable, ArtifactsConfig.txt, default cache) and
-# finds it. For host scripts executed before any integration test preset was
-# configured (nothing else installs probe-rs then).
+# Downloads the artifact probe-rs in the configured version (the same version
+# the integration test preset configures) by the artifacts handler of the
+# platform (cache of the project: parameter, environment variable,
+# ArtifactsConfig.txt, default cache) and finds it. For host scripts executed
+# before any integration test preset was configured (nothing else downloads
+# probe-rs then).
 #
-# PROBE_RS_VAR [out]: probe-rs executable ("" if the installation failed)
+# PROBE_RS_VAR [out]: probe-rs executable ("" if the download failed)
 # PROJECT_DIR  [in]:  Project root folder
+# MCU          [in]:  MCU, optional (see IntegrationTesting_FindProbeRs)
 #------------------------------------------------------------------------------#
 function(IntegrationTesting_InstallProbeRs PROBE_RS_VAR PROJECT_DIR)
 
-    set(HANDLER "${CMAKE_CURRENT_LIST_DIR}/../ArtifactsHandler/ArtifactsHandler.cmake")
+    # Optional MCU (ARGV2 of a function called without the argument is inherited from the
+    # caller, ARGC is not)
+    set(MCU "")
 
-    if(EXISTS "${HANDLER}")
-        message(STATUS "probe-rs not found - installing the artifact probe-rs.")
-
-        # The handler runs in its own process - it does not see the CMake
-        # parameters of this script, so the cache folder parameter is passed on.
-        set(HANDLER_ARGS "-DCONFIG_FILE_PATH=${PROJECT_DIR}")
-
-        if(NOT "${ARTIFACTS_HANDLER_CACHE_PATH}" STREQUAL "")
-            list(APPEND HANDLER_ARGS "-DARTIFACTS_HANDLER_CACHE_PATH=${ARTIFACTS_HANDLER_CACHE_PATH}")
-        else()
-            # Cache folder from the environment variable / ArtifactsConfig.txt
-        endif()
-
-        set(ENV{ARTIFACTS_HANDLER_REQ_LIST} "probe-rs;latest;latest")
-        execute_process(COMMAND           "${CMAKE_COMMAND}" ${HANDLER_ARGS} -P "${HANDLER}"
-                        WORKING_DIRECTORY "${PROJECT_DIR}"
-                        RESULT_VARIABLE   INSTALL_RESULT)
-        unset(ENV{ARTIFACTS_HANDLER_REQ_LIST})
-
-        if(NOT INSTALL_RESULT EQUAL 0)
-            message(WARNING "Installation of the artifact probe-rs failed (${INSTALL_RESULT}).")
-        endif()
+    if(ARGC GREATER 2)
+        set(MCU "${ARGV2}")
+    else()
+        # No MCU - the first integration test preset of the project defines the version
     endif()
 
-    IntegrationTesting_FindProbeRs(PROBE_RS "${PROJECT_DIR}")
+    IntegrationTesting_Get_ProbeRsPreset(PRESET "${PROJECT_DIR}" "${MCU}")
+
+    ArtifactsResolver_Provide(BIN_DIR "${PROJECT_DIR}" "${PRESET}" probe-rs)
+
+    IntegrationTesting_FindProbeRs(PROBE_RS "${PROJECT_DIR}" "${MCU}")
 
     set(${PROBE_RS_VAR} "${PROBE_RS}" PARENT_SCOPE)
 
 endfunction(IntegrationTesting_InstallProbeRs)
+
+#------------------------------------------------------------------------------#
+# Provides probe-rs for host scripts that execute it (flash, detection of boards,
+# execution of tests): probe-rs found by IntegrationTesting_FindProbeRs (explicit
+# path, the configured version in the artifacts cache), otherwise the artifact
+# is downloaded by the artifacts handler (IntegrationTesting_InstallProbeRs).
+# probe-rs of the system is never used. The script ends with an error if the
+# artifact cannot be provided.
+#
+# PROBE_RS_VAR [out]: probe-rs executable
+# PROJECT_DIR  [in]:  Project root folder
+# MCU          [in]:  MCU, optional (see IntegrationTesting_FindProbeRs)
+#------------------------------------------------------------------------------#
+function(IntegrationTesting_ProvideProbeRs PROBE_RS_VAR PROJECT_DIR)
+
+    # Optional MCU (ARGV2 of a function called without the argument is inherited from the
+    # caller, ARGC is not)
+    set(MCU "")
+
+    if(ARGC GREATER 2)
+        set(MCU "${ARGV2}")
+    else()
+        # No MCU - the first integration test preset of the project defines the version
+    endif()
+
+    IntegrationTesting_FindProbeRs(PROBE_RS "${PROJECT_DIR}" "${MCU}")
+
+    if(NOT PROBE_RS)
+        IntegrationTesting_InstallProbeRs(PROBE_RS "${PROJECT_DIR}" "${MCU}")
+    endif()
+
+    if(NOT PROBE_RS)
+
+        IntegrationTesting_Get_ProbeRsPreset(PRESET "${PROJECT_DIR}" "${MCU}")
+        ArtifactsResolver_Get_Record(RECORD "${PROJECT_DIR}" "${PRESET}" probe-rs)
+
+        if("${RECORD}" STREQUAL "")
+            message(FATAL_ERROR "The artifact probe-rs is not configured - add it to ARTIFACTS_HANDLER_REQ_LIST of the "
+                                "integration test preset (or to ArtifactsConfig.txt of the project) or pass -DIT_PROBE_RS=<path>.")
+        else()
+            message(FATAL_ERROR "The artifact probe-rs in the configured version (${RECORD}) was not found and its download "
+                                "failed - check the artifacts configuration (ArtifactsConfig.txt, network) or pass "
+                                "-DIT_PROBE_RS=<path>.")
+        endif()
+
+    endif()
+
+    set(${PROBE_RS_VAR} "${PROBE_RS}" PARENT_SCOPE)
+
+endfunction(IntegrationTesting_ProvideProbeRs)
 
 
 #------------------------------------------------------------------------------#

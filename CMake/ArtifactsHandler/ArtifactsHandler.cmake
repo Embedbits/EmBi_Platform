@@ -118,6 +118,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/CacheHandler.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/ConfigFileHandler.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/ParamsHandler.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/RootRepoHandler.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/ArtifactsResolver.cmake")
 
 #==============================================================================#
 # Global variables
@@ -321,11 +322,13 @@ function(ArtifactsHandler_Get_RequiredArtifactsList ARTIFACTS_CONFIG_FILE_PATH_A
     elseif(ARTIFACTS_LIST_SRC STREQUAL ARTIFACTS_HANDLER_ARTIFACT_LIST_SRC_PARAM)
 
         # Read list of Required Artifacts entered through CMake parameters
+        message(STATUS "List of artifacts: ${ARTIFACTS_HANDLER_REQ_LIST}")
         ParamsHandler_Get_ArtifactsList("${ARTIFACTS_HANDLER_REQ_LIST}" REQUIRED_ARTIFACTS_LIST)
 
     elseif(ARTIFACTS_LIST_SRC STREQUAL ARTIFACTS_HANDLER_ARTIFACT_LIST_SRC_ENV)
 
         # Read list of Required Artifacts entered through environment variable
+        message(STATUS "List of artifacts: $ENV{ARTIFACTS_HANDLER_REQ_LIST}")
         ParamsHandler_Get_ArtifactsList("$ENV{ARTIFACTS_HANDLER_REQ_LIST}" REQUIRED_ARTIFACTS_LIST)
 
     else()

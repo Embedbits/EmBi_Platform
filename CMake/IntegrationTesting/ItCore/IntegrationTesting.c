@@ -13,6 +13,10 @@
  *        -> test case [TestIndex] -> TestIndex++ -> system reset
  *        -> ... -> all test cases done -> summary -> State DONE -> busy loop
  *
+ * With INTEGRATION_TEST_COVERAGE the counters of the gcov instrumentation of the code under
+ * test sum up all test cases (IntegrationTesting_Coverage.h) and are serialized for the host
+ * after the last one.
+ *
  * Test case interrupted by reset is evaluated after the reset:
  *  - fault handler      - failure is reported by the handler, next test case
  *  - host abort command - blocked test case, failure, next test case
@@ -29,6 +33,9 @@
 #include "IntegrationTesting_Target.h"      /* Target interface (test set)    */
 #include "unity.h"                          /* Unity testing framework        */
 #include "stdatomic.h"                      /* Memory barriers                */
+#if defined(IT_COVERAGE)
+#include "IntegrationTesting_Coverage.h"    /* Code coverage (gcov)           */
+#endif
 /* ============================= TYPEDEFS =================================== */
 
 /* ======================= FORWARD DECLARATIONS ============================= */
@@ -91,6 +98,15 @@ integrationTesting_Mailbox_t integrationTesting_Mailbox;
  */
 void IntegrationTesting_Run( void )
 {
+#if defined(IT_COVERAGE)
+    /* The counters of the gcov instrumentation are kept over the resets between the test cases,
+       they are cleared once - when a new test session starts (the mailbox is not valid yet) */
+    if( IT_MAILBOX_MAGIC != integrationTesting_Mailbox.Magic )
+    {
+        IntegrationTesting_Coverage_Clear();
+    }
+#endif
+
     ItTarget_Init();
 
     integrationTesting_MailboxOpen();
@@ -433,6 +449,11 @@ static void integrationTesting_Finish( void )
     {
         integrationTesting_PutString( "FAIL\n" );
     }
+
+#if defined(IT_COVERAGE)
+    /* Counters of all test cases are serialized for the host */
+    IntegrationTesting_Coverage_Dump();
+#endif
 
     /* All output is stored before the state is changed */
     atomic_thread_fence( memory_order_seq_cst );

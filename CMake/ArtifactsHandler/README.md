@@ -104,6 +104,22 @@ Only the line of the host is used, the line of another system is skipped. When t
 
 Tools that read the cache outside of the handler (VSCode setup, integration testing) use `ArtifactsHandler_Get_ArtifactsCachePath` (it reads the configuration through `ConfigFileHandler_Get_CachePath`), they do not parse `ArtifactsConfig.txt` themselves.
 
+### Tools outside of the configuration of a preset (`ArtifactsResolver.cmake`)
+Scripts executed outside of the configuration of a preset (VSCode tasks and debug configurations, flashing, detection of boards) need a tool of an artifact (probe-rs, gdb, ...). The tool is **never taken from the system (PATH) and never as the newest version found in the cache** - the version is the one the handler uses when the preset is configured. `ArtifactsResolver.cmake` (included by `ArtifactsHandler.cmake`, usable with `ARTIFACTS_HANDLER_NO_RUN`) finds it:
+
+1. The list of artifacts: the parameter or the environment variable `ARTIFACTS_HANDLER_REQ_LIST`, otherwise `ARTIFACTS_HANDLER_REQ_LIST` of the configure preset (resolved through `inherits` and `include` of `CMakePresets.json`, the preset listed earlier in `inherits` wins, as in CMake), otherwise `ArtifactsConfig.txt` of the project.
+2. The Bin folder: the exact version of the record, `latest` = the newest cached version (the handler refreshes it from remote once a day when a preset is configured) - `ArtifactsResolver_Get_BinDir`.
+3. A missing artifact is downloaded by the handler in the configured version (`ArtifactsResolver_Provide`), not as `latest`.
+
+| Function | Description |
+|----------|-------------|
+| `ArtifactsResolver_Find_Preset(<out> <project> <suffix> <mcu>)` | Configure preset `<mcu><suffix>` (without MCU the first one with the suffix) |
+| `ArtifactsResolver_Get_Record(<out> <project> <preset> <name>)` | Configured record `name\|Bin version\|Core version` of the artifact |
+| `ArtifactsResolver_Get_BinDir(<dir> <record> <project> <preset> <name>)` | Bin folder of the configured version in the cache |
+| `ArtifactsResolver_Provide(<dir> <project> <preset> <name>)` | The same, the artifact is downloaded if it is missing |
+
+The functions print nothing (VSCode reads the output of some scripts).
+
 ### Use of the functions without starting the handler
 `ArtifactsHandler.cmake` starts the handler when it is included (the `CMakeLists.txt` of the projects do that) and in script mode (`cmake -P`). A script that needs only its functions sets `ARTIFACTS_HANDLER_NO_RUN` before the include, nothing is installed or downloaded then:
 ```cmake

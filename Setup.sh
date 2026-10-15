@@ -82,44 +82,34 @@ initialization() {
     clear
     echo "====================================="
     echo "0: Back to main menu"
-    echo "1: Project structure initialization"
-    echo "2: STM32CubeIDE project initialization"
-    echo "3: VSCode project initialization"
-    echo "4: BSP module - Configuration"
-    echo "5: BSP module - Update version"
-    echo "6: Middleware module - Configuration"
-    echo "7: Middleware module - Update version"
-    echo "8: Documents module - Configuration"
-    echo "9: Module update (Updater)"
-    echo "10: Artifacts (artifacts handler)"
+    echo "1: BSP module - Configuration"
+    echo "2: BSP module - Update version"
+    echo "3: Middleware module - Configuration"
+    echo "4: Middleware module - Update version"
+    echo "5: Documents module - Configuration"
+    echo "6: Module update (Updater)"
+    echo "7: Artifacts (artifacts handler)"
+    echo "8: STM32CubeIDE project initialization"
+    echo "9: VSCode project initialization"
     echo "====================================="
-    read -p "Enter your selection (0-10): " choice
+    read -p "Enter your selection (0-9): " choice
     case "$choice" in
         0) menu ;;
-        1) run_init_project ;;
-        2) run_init_cubeide ;;
-        3) run_init_vscode ;;
-        4) run_bsp_config ;;
-        5) run_bsp_update ;;
-        6) run_mw_config ;;
-        7) run_mw_update ;;
-        8) run_docs_init ;;
-        9) run_module_update ;;
-        10) artifacts_menu ;;
+        1) run_bsp_config ;;
+        2) run_bsp_update ;;
+        3) run_mw_config ;;
+        4) run_mw_update ;;
+        5) run_docs_init ;;
+        6) run_module_update ;;
+        7) artifacts_menu ;;
+        8) run_init_cubeide ;;
+        9) run_init_vscode ;;
         *)
             echo "Incorrect selection. Try again."
             pause
             initialization
             ;;
     esac
-}
-
-run_init_project() {
-    clear
-    cmake -P CMake/HelperTools/Prj_Handler/Prj_Handler.cmake
-    cmake -P CMake/HelperTools/App_Handler/App_ModuleHandler.cmake
-    pause
-    initialization
 }
 
 run_init_cubeide() {
@@ -132,9 +122,31 @@ run_init_cubeide() {
 
 run_init_vscode() {
     clear
+    # MCUs and debug configurations come from the Ral presets of the BSP module
+    if [ ! -f "../Bsp/Ral/RalPresets.json" ]; then
+        echo "BSP module is not initialized yet - run \"BSP module - Configuration\" first."
+        read -p "Return to the configuration menu (Y/n): " RETURN_ANSWER
+        if [ "$RETURN_ANSWER" != "n" ] && [ "$RETURN_ANSWER" != "N" ]; then
+            initialization
+            return
+        fi
+    fi
     cmake -DFUNCTION_ID="MCU_LIST" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake
-    read -p "Enter MCU IDs of debug configurations (separated by comma, 0 = all, empty = MCUs of connected boards): " MCU_IDS
-    cmake -DFUNCTION_ID="INIT" -DMCU_IDS="$MCU_IDS" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake
+    read -p "Enter MCU IDs of debug configurations (separated by comma, 0 = all):" MCU_IDS
+    cmake -DFUNCTION_ID="FIRMWARE_NAME" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake
+    read -p "Enter firmware name (without spaces and build type, empty = keep current): " FIRMWARE_NAME
+    cmake -DFUNCTION_ID="INIT" -DMCU_IDS="$MCU_IDS" -DFIRMWARE_NAME="$FIRMWARE_NAME" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake
+    # The generated configuration needs VSCode extensions - installation of the missing ones is offered
+    MISSING_EXTENSIONS=$(cmake -DFUNCTION_ID="EXTENSIONS_CHECK" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake | tr -d '\r')
+    if [ -n "$MISSING_EXTENSIONS" ]; then
+        echo ""
+        echo "Missing VSCode extensions:"
+        echo "$MISSING_EXTENSIONS"
+        read -p "Install the missing extensions now (Y/n): " INSTALL_ANSWER
+        if [ "$INSTALL_ANSWER" != "n" ] && [ "$INSTALL_ANSWER" != "N" ]; then
+            cmake -DFUNCTION_ID="EXTENSIONS_INSTALL" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake
+        fi
+    fi
     pause
     initialization
 }
@@ -230,12 +242,16 @@ run_tests() {
     echo "0: Back to main menu"
     echo "1: Unit tests"
     echo "2: Integration tests"
+    echo "3: Coverage of the last unit tests"
+    echo "4: Coverage of the last integration tests"
     echo "====================================="
-    read -p "Enter your selection (0-2): " choice
+    read -p "Enter your selection (0-4): " choice
     case "$choice" in
         0) menu; return ;;
         1) TEST_TYPE="UT" ;;
         2) TEST_TYPE="IT" ;;
+        3) run_tests_coverage "UT"; return ;;
+        4) run_tests_coverage "IT"; return ;;
         *)
             echo "Incorrect selection. Try again."
             pause
@@ -254,14 +270,43 @@ run_tests() {
         run_tests
         return
     fi
-    if ! cmake -DFUNCTION_ID="TEST_BUILD" -DTEST_TYPE="$TEST_TYPE" -DTARGET_ID="$TARGET_ID" -P CMake/HelperTools/Build_Handler/Build_Handler.cmake; then
+    # Unit tests: the code coverage is always created and printed at the end. Integration tests: the firmware with the
+    # coverage is bigger (it does not fit into the flash of small devices) and slower, so it is asked for.
+    if [ "$TEST_TYPE" = "UT" ]; then
+        TEST_COVERAGE="ON"
+    else
+        TEST_COVERAGE="OFF"
+        read -p "Code coverage of the tests (y/N): " COVERAGE_ANSWER
+        case "$COVERAGE_ANSWER" in
+            [yY]*) TEST_COVERAGE="ON" ;;
+        esac
+    fi
+    if ! cmake -DFUNCTION_ID="TEST_BUILD" -DTEST_TYPE="$TEST_TYPE" -DTARGET_ID="$TARGET_ID" -DTEST_COVERAGE="$TEST_COVERAGE" -P CMake/HelperTools/Build_Handler/Build_Handler.cmake; then
         pause
         menu
         return
     fi
     read -p "Enter test set ID (numerical, 0 = All test sets): " TEST_ID
     TEST_ID="${TEST_ID:-0}"
-    cmake -DFUNCTION_ID="TEST_RUN" -DTEST_TYPE="$TEST_TYPE" -DTARGET_ID="$TARGET_ID" -DTEST_ID="$TEST_ID" -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
+    cmake -DFUNCTION_ID="TEST_RUN" -DTEST_TYPE="$TEST_TYPE" -DTARGET_ID="$TARGET_ID" -DTEST_ID="$TEST_ID" -DTEST_COVERAGE="$TEST_COVERAGE" -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
+    pause
+    menu
+}
+
+run_tests_coverage() {
+    TEST_TYPE="$1"
+    clear
+    cmake -DFUNCTION_ID="TEST_TARGET_LIST" -DTEST_TYPE="$TEST_TYPE" -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
+    if [ "$TEST_TYPE" = "UT" ]; then
+        read -p "Enter MCU ID (numerical): " TARGET_ID
+    else
+        read -p "Enter board ID (numerical): " TARGET_ID
+    fi
+    if [ -z "$TARGET_ID" ] || [ "$TARGET_ID" = "0" ]; then
+        run_tests
+        return
+    fi
+    cmake -DFUNCTION_ID="TEST_COVERAGE" -DTEST_TYPE="$TEST_TYPE" -DTARGET_ID="$TARGET_ID" -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
     pause
     menu
 }

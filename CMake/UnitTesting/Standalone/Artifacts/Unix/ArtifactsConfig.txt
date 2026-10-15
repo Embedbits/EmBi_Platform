@@ -4,3 +4,4 @@ gcc;15.2.0;latest
 ruby;latest;latest
 unity;latest;latest
 cmock;latest;latest
+gcovr;latest;latest

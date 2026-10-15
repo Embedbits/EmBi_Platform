@@ -94,16 +94,7 @@ endfunction(IntegrationTesting_SelectCandidate)
 #------------------------------------------------------------------------------#
 function(IntegrationTesting_DetectBoards PROJECT_DIR MCU_PRESETS_FILE OVERRIDE_FILE OUT_FILE)
 
-    IntegrationTesting_FindProbeRs(IT_PROBE_RS "${PROJECT_DIR}")
-
-    if(NOT IT_PROBE_RS)
-        IntegrationTesting_InstallProbeRs(IT_PROBE_RS "${PROJECT_DIR}")
-    endif()
-
-    if(NOT IT_PROBE_RS)
-        message(FATAL_ERROR "probe-rs not found - configure an integration test preset (artifact 'probe-rs') "
-                            "or pass -DIT_PROBE_RS=<path>.")
-    endif()
+    IntegrationTesting_ProvideProbeRs(IT_PROBE_RS "${PROJECT_DIR}")
 
     # Integration test presets of the project
     set(PROJECT_PRESETS_FILE "${PROJECT_DIR}/CMakePresets.json")

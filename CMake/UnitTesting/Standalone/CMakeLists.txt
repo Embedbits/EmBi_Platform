@@ -26,6 +26,11 @@
 #                             Unity / CMock from UNITY_ROOT / CMOCK_ROOT or
 #                             downloaded from GitHub (pinned versions)
 #
+#   UNIT_TEST_COVERAGE    - OFF (default) / ON: coverage of the tested modules (target
+#                           UnitTest_Coverage, see UnitTesting.cmake); the paths of
+#                           the report are relative to the common parent folder of the
+#                           modules (UNIT_TEST_COVERAGE_ROOT)
+#
 # Limitation: modules depending on MCU (RAL / LL, TARGET_MCU) can not be tested
 # standalone yet - they are tested in project UnitTest build.
 ################################################################################
@@ -72,6 +77,37 @@ foreach(MODULE_PATH IN LISTS UNIT_TEST_MODULE_PATH)
     list(APPEND UNIT_TEST_MODULE_DIRS "${MODULE_DIR}")
 
 endforeach()
+
+# Root of the coverage report: the common parent folder of the modules (the source folder
+# of this project is the folder of the platform)
+if(NOT DEFINED CACHE{UNIT_TEST_COVERAGE_ROOT})
+
+    list(GET UNIT_TEST_MODULE_DIRS 0 COVERAGE_ROOT_DIR)
+    get_filename_component(COVERAGE_ROOT_DIR "${COVERAGE_ROOT_DIR}" DIRECTORY)
+
+    foreach(MODULE_DIR IN LISTS UNIT_TEST_MODULE_DIRS)
+
+        while(TRUE)
+
+            string(LENGTH "${COVERAGE_ROOT_DIR}/" ROOT_PREFIX_LENGTH)
+            string(SUBSTRING "${MODULE_DIR}/" 0 ${ROOT_PREFIX_LENGTH} MODULE_PREFIX)
+
+            get_filename_component(PARENT_DIR "${COVERAGE_ROOT_DIR}" DIRECTORY)
+
+            # The root of the file system (modules on different drives) ends the search
+            if(MODULE_PREFIX STREQUAL "${COVERAGE_ROOT_DIR}/" OR PARENT_DIR STREQUAL COVERAGE_ROOT_DIR)
+                break()
+            endif()
+
+            set(COVERAGE_ROOT_DIR "${PARENT_DIR}")
+
+        endwhile()
+
+    endforeach()
+
+    set(UNIT_TEST_COVERAGE_ROOT "${COVERAGE_ROOT_DIR}" CACHE PATH "Root of the sources in the coverage report")
+
+endif()
 
 #============================ Artifacts preparation ===========================#
 

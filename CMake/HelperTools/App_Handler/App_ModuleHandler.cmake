@@ -44,6 +44,10 @@ include("${SYSTEM_CONFIG_FILE_PATH}")
 # Read project root folder path
 SysConfig_Get_ProjectRootPath(PROJECT_ROOT_PATH)
 
+# Folder of the templates (CMAKE_CURRENT_LIST_DIR inside of a function is the
+# folder of the file, which calls it - the function can be called from other handlers)
+set(APP_HANDLER_TEMPLATES_PATH "${CMAKE_CURRENT_LIST_DIR}")
+
 # Application (App) component path relative to project root path.
 set(APP_REL_PATH "Application")
 
@@ -78,13 +82,13 @@ function(App_ModuleHandler_Init)
     
     # Copy necessary .c & .h files
     if(NOT EXISTS "${PROJECT_ROOT_PATH}/${APP_REL_PATH}/AppMain/AppMain.c")
-        configure_file("${CMAKE_CURRENT_LIST_DIR}/Template_AppMain.c.in"
+        configure_file("${APP_HANDLER_TEMPLATES_PATH}/Template_AppMain.c.in"
                        "${PROJECT_ROOT_PATH}/${APP_REL_PATH}/AppMain/AppMain.c"
                        @ONLY)
     endif()
         
     if(NOT EXISTS "${PROJECT_ROOT_PATH}/${APP_REL_PATH}/AppMain/AppMain.h")
-        configure_file("${CMAKE_CURRENT_LIST_DIR}/Template_AppMain.h.in"
+        configure_file("${APP_HANDLER_TEMPLATES_PATH}/Template_AppMain.h.in"
                        "${PROJECT_ROOT_PATH}/${APP_REL_PATH}/AppMain/AppMain.h"
                        @ONLY)
     endif()
@@ -92,16 +96,19 @@ function(App_ModuleHandler_Init)
     # Set output path for AppMain module
     set(APP_MAIN_MODULE_OUTPUT_PATH "${PROJECT_ROOT_PATH}/${APP_REL_PATH}/AppMain/")
     
-    # Generate CMakeLists.txt for AppMain module
-    CMakeLists_Handler_Set_PrivateInlcudeDirs("\${CMAKE_CURRENT_SOURCE_DIR}")
-    CMakeLists_Handler_Set_PublicInlcudeDirs("")
-    CMakeLists_Handler_Set_SourceFiles("AppMain.c")
-    CMakeLists_Handler_Set_PublicHeaderFiles("AppMain.h")
-    CMakeLists_Handler_Set_PublicDependenLibs("")
-    CMakeLists_Handler_Set_PrivateDependentLibs("")
-    CMakeLists_Handler_Set_ModuleName("AppMain")
-    CMakeLists_Handler_Generate_CMakeLists("${APP_MAIN_MODULE_OUTPUT_PATH}")
-    
+    # Generate CMakeLists.txt for AppMain module (user modified file is kept -
+    # the initialization is repeated with every BSP configuration)
+    if(NOT EXISTS "${APP_MAIN_MODULE_OUTPUT_PATH}/CMakeLists.txt")
+        CMakeLists_Handler_Set_PrivateInlcudeDirs("\${CMAKE_CURRENT_SOURCE_DIR}")
+        CMakeLists_Handler_Set_PublicInlcudeDirs("")
+        CMakeLists_Handler_Set_SourceFiles("AppMain.c")
+        CMakeLists_Handler_Set_PublicHeaderFiles("AppMain.h")
+        CMakeLists_Handler_Set_PublicDependenLibs("")
+        CMakeLists_Handler_Set_PrivateDependentLibs("")
+        CMakeLists_Handler_Set_ModuleName("AppMain")
+        CMakeLists_Handler_Generate_CMakeLists("${APP_MAIN_MODULE_OUTPUT_PATH}")
+    endif()
+
     
     set(OUTPUT_PATH "${PROJECT_ROOT_PATH}/${APP_REL_PATH}/App.cmake")
     set(CONTENT "add_subdirectory(\${CMAKE_CURRENT_LIST_DIR}/AppMain)")

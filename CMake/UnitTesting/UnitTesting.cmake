@@ -23,11 +23,30 @@
 #   CMOCK_ROOT      - CMock root folder (src/cmock.c, lib/cmock.rb)
 #   RUBY_EXECUTABLE - Ruby interpreter, searched in PATH if not specified
 # Each value can be passed as CMake parameter or as environment variable.
+# Coverage (UNIT_TEST_COVERAGE=ON) needs the artifact "gcovr" (GCOVR_EXECUTABLE) and
+# the gcov of the compiler (found next to it).
 #
 # Optional parameters:
 #   UNIT_TEST_CONFIG_FILE - CMock / runner configuration (default UnitTesting.yml)
 #   UNIT_TEST_COVERAGE    - OFF (default) / ON: gcov instrumentation of code
-#                           under test and "UnitTest_Coverage" report target
+#                           under test and the coverage targets (Coverage/Coverage.cmake):
+#                             UnitTest_Coverage         report (HTML, Cobertura XML, JSON)
+#                                                       after the tests were executed (ctest)
+#                             UnitTest_CoverageSummary  table of the last report
+#                             UnitTest_CoverageReset    deletes the counters of earlier runs
+#   UNIT_TEST_COVERAGE_CTEST_REPORT - ON (default) / OFF: with the coverage ctest creates the report
+#                           and prints the table of the coverage after the last test (CTestCustom.cmake of
+#                           the build folder); scripts which create the report themselves switch it OFF
+#   UNIT_TEST_COVERAGE_ROOT - Root of the sources in the report (default: source folder
+#                           of the project)
+#   UNIT_TEST_COVERAGE_MIN_LINES - Required line coverage in percent, the report fails
+#                           below it (default 0 = not checked)
+#   UNIT_TEST_MODEL_RUN_SERIAL - AUTO (default) / ON / OFF: tests registered with
+#                           RUN_SERIAL (HW model) run alone (never in parallel with
+#                           other tests of ctest -j). AUTO: only on hosts where the
+#                           HW model of RegMem runs in a thread (not x86-64 Linux /
+#                           Windows) - the synchronous model does not depend on the
+#                           load of the host, the tests can run in parallel.
 #
 # Registration in module CMakeLists.txt (same principle as Doxygen_AddPath):
 #   if(UNIT_TESTING_AVAILABLE STREQUAL "ON")
@@ -48,7 +67,9 @@
 #                                                         # (test, code under test, HOST_LIBS)
 #       HOST_LIBS     Ral_Lib                             # Target libraries compiled for host
 #       COVERAGE_EXCLUDE ".*/Ral/.*"                      # Code excluded from coverage report
-#       RUN_SERIAL                                        # Test uses HW model thread
+#       RUN_SERIAL                                        # Test uses HW model - runs alone (ctest -j)
+#                                                         # only where the model runs in a thread
+#                                                         # (UNIT_TEST_MODEL_RUN_SERIAL)
 #   )
 #   Every "void Ut_...( void )" function in TEST_SOURCE is registered as
 #   separate CTest test "<NAME>.<function>".
@@ -65,7 +86,29 @@ set(UNIT_TEST_CONFIG_FILE               "${UNIT_TESTING_DIR}/UnitTesting.yml"
 
 option(UNIT_TEST_COVERAGE               "Instrument code under test by gcov" OFF)
 
+option(UNIT_TEST_COVERAGE_CTEST_REPORT  "ctest prints the table of the coverage after the tests (with UNIT_TEST_COVERAGE)" ON)
+
+set(UNIT_TEST_COVERAGE_ROOT             "${CMAKE_SOURCE_DIR}"
+    CACHE PATH                          "Root of the sources in the coverage report")
+
+set(UNIT_TEST_COVERAGE_MIN_LINES        "0"
+    CACHE STRING                        "Required line coverage in percent (0 = not checked)")
+
 option(UNIT_TEST_RUN_KNOWN_DEFECTS      "Execute tests of known defects (UT_KNOWN_DEFECT) instead of ignoring them" OFF)
+
+set(UNIT_TEST_MODEL_RUN_SERIAL          "AUTO"
+    CACHE STRING                        "Tests with HW model run alone (RUN_SERIAL): AUTO - only where the HW model runs in a thread, ON, OFF")
+
+set_property(CACHE UNIT_TEST_MODEL_RUN_SERIAL PROPERTY STRINGS "AUTO" "ON" "OFF")
+
+# Hosts with the synchronous HW model of RegMem (write trap, RegMem.c REGMEM_TRAP_SUPPORTED):
+# x86-64 Linux and Windows. The model of other hosts runs in a thread that needs a free CPU.
+if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|x64)$" AND
+   (CMAKE_HOST_WIN32 OR CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux"))
+    set(UNIT_TEST_MODEL_SYNC_HOST       ON)
+else()
+    set(UNIT_TEST_MODEL_SYNC_HOST       OFF)
+endif()
 
 # Compiler options of all target code built for host (tests, HOST_LIBS). 32-bit
 # target code casts register addresses to uint32_t. It is safe on 64-bit host
@@ -101,7 +144,12 @@ if(NOT RUBY_EXECUTABLE AND DEFINED ENV{RUBY_EXECUTABLE})
     set(RUBY_EXECUTABLE "$ENV{RUBY_EXECUTABLE}" CACHE FILEPATH "Ruby interpreter" FORCE)
 endif()
 
-find_program(RUBY_EXECUTABLE ruby)
+# Ruby comes from the artifact in the configured version (RUBY_EXECUTABLE is exported by the artifact
+# initialization) or from the parameter; ruby of the system (PATH) is searched only in the explicit
+# SYSTEM mode of the standalone unit tests (UNIT_TEST_TOOLS=SYSTEM)
+if(NOT RUBY_EXECUTABLE AND "${UNIT_TEST_TOOLS}" STREQUAL "SYSTEM")
+    find_program(RUBY_EXECUTABLE ruby)
+endif()
 
 if(NOT RUBY_EXECUTABLE)
     message(FATAL_ERROR "Ruby not found. It is required by CMock and Unity runner generator. "
@@ -111,6 +159,12 @@ endif()
 message(STATUS "Unity: ${UNITY_ROOT}")
 message(STATUS "CMock: ${CMOCK_ROOT}")
 message(STATUS "Ruby:  ${RUBY_EXECUTABLE}")
+
+# gcovr of the coverage report (artifact "gcovr")
+if(UNIT_TEST_COVERAGE)
+    include("${UNIT_TESTING_DIR}/../Coverage/Coverage.cmake")
+    Coverage_Provide_Gcovr(UNIT_TEST_COVERAGE)
+endif()
 
 #=========================== Testing libraries ================================#
 
@@ -479,8 +533,18 @@ function(UnitTesting_Add_Test)
             LABELS                  "unit;${UT_NAME}"
         )
 
-        # Tests using HW model thread (RegMem_Set_ModelActive) need free CPU
-        if(UT_RUN_SERIAL)
+        # The counters of the tests of one executable are written to the same *.gcda files, which
+        # are not safe against two processes (the tests of one executable never run in parallel;
+        # the tests of other executables do, they have own files)
+        if(UNIT_TEST_COVERAGE)
+            set_tests_properties("${UT_NAME}.${TEST_CASE}" PROPERTIES RESOURCE_LOCK "${TEST_TARGET}")
+        endif()
+
+        # Tests using the HW model thread of RegMem (RegMem_Set_ModelActive) need a free CPU. The
+        # synchronous model (x86-64 Linux / Windows) does not depend on the load of the host.
+        if(UT_RUN_SERIAL AND
+           (UNIT_TEST_MODEL_RUN_SERIAL STREQUAL "ON" OR
+            (UNIT_TEST_MODEL_RUN_SERIAL STREQUAL "AUTO" AND NOT UNIT_TEST_MODEL_SYNC_HOST)))
             set_tests_properties("${UT_NAME}.${TEST_CASE}" PROPERTIES RUN_SERIAL TRUE)
         endif()
 
@@ -499,7 +563,8 @@ endfunction(UnitTesting_Add_Test)
 #============================= Coverage report ================================#
 
 #------------------------------------------------------------------------------#
-# Creates coverage report target "UnitTest_Coverage" (UNIT_TEST_COVERAGE=ON).
+# Creates the coverage targets (UNIT_TEST_COVERAGE=ON), see Coverage.cmake:
+# UnitTest_Coverage, UnitTest_CoverageSummary, UnitTest_CoverageReset.
 # Called by UnitTesting_Generate() after all tests are created - excludes
 # registered by the test sets (COVERAGE_EXCLUDE) are known.
 #------------------------------------------------------------------------------#
@@ -509,14 +574,14 @@ function(unitTesting_CoverageTarget)
         return()
     endif()
 
-    find_program(GCOVR_EXECUTABLE gcovr)
+    Coverage_Find_Gcov(GCOV "${CMAKE_C_COMPILER}" "${CMAKE_C_COMPILER_ID}")
 
-    if(NOT GCOVR_EXECUTABLE)
-        message(WARNING "UNIT_TEST_COVERAGE is ON but gcovr was not found. Coverage report target is not available.")
-        return()
+    if(NOT GCOV)
+        message(FATAL_ERROR "UNIT_TEST_COVERAGE is ON but gcov of the compiler ${CMAKE_C_COMPILER} was not found "
+                            "next to it (gcov of another compiler gives wrong data).")
     endif()
 
-    set(COVERAGE_DIR "${CMAKE_BINARY_DIR}/Coverage")
+    message(STATUS "gcov: ${GCOV}")
 
     # Test sources and generated mocks are never reported, other excludes are
     # registered by the test sets
@@ -525,25 +590,21 @@ function(unitTesting_CoverageTarget)
     set(COVERAGE_EXCLUDES ".*/Tests/.*" ".*/Mocks/.*" ${COVERAGE_EXCLUDES})
     list(REMOVE_DUPLICATES COVERAGE_EXCLUDES)
 
-    set(COVERAGE_EXCLUDE_ARGS "")
+    set(COVERAGE_CTEST_REPORT "")
 
-    foreach(COVERAGE_EXCLUDE IN LISTS COVERAGE_EXCLUDES)
-        list(APPEND COVERAGE_EXCLUDE_ARGS --exclude "${COVERAGE_EXCLUDE}")
-    endforeach()
+    if(UNIT_TEST_COVERAGE_CTEST_REPORT)
+        set(COVERAGE_CTEST_REPORT CTEST_REPORT)
+    endif()
 
-    # Cobertura XML is consumed by Azure Pipelines (PublishCodeCoverageResults)
-    add_custom_target(UnitTest_Coverage
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${COVERAGE_DIR}"
-        COMMAND "${GCOVR_EXECUTABLE}"
-                --root "${CMAKE_SOURCE_DIR}"
-                --object-directory "${CMAKE_BINARY_DIR}"
-                ${COVERAGE_EXCLUDE_ARGS}
-                --html-details "${COVERAGE_DIR}/index.html"
-                --cobertura "${COVERAGE_DIR}/Cobertura.xml"
-                --print-summary
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        COMMENT "Generating unit test coverage report"
-        VERBATIM
+    Coverage_Add_Targets(
+        ${COVERAGE_CTEST_REPORT}
+        PREFIX      UnitTest
+        TITLE       "Unit tests coverage - ${CMAKE_PROJECT_NAME}"
+        GCOV        "${GCOV}"
+        ROOT        "${UNIT_TEST_COVERAGE_ROOT}"
+        SEARCH_DIRS "${CMAKE_BINARY_DIR}"
+        EXCLUDES    ${COVERAGE_EXCLUDES}
+        MIN_LINES   "${UNIT_TEST_COVERAGE_MIN_LINES}"
     )
 
 endfunction(unitTesting_CoverageTarget)

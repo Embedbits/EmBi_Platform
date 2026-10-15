@@ -49,7 +49,7 @@
             "description": "Host based unit tests (Unity + CMock). Host tools replace the artifacts list of project ArtifactsConfig.txt (no ARM toolchain), gcc artifact exists for Windows and Linux (system gcc on macOS)",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "UnitTest",
-                "ARTIFACTS_HANDLER_REQ_LIST": "ninja;1.12.0;latest,gcc;15.2.0;latest,ruby;latest;latest,unity;latest;latest,cmock;latest;latest"
+                "ARTIFACTS_HANDLER_REQ_LIST": "ninja;1.12.0;latest,gcc;15.2.0;latest,ruby;latest;latest,unity;latest;latest,cmock;latest;latest,gcovr;latest;latest"
             },
             "vendor": {
                 "embedbits.com/EmBi": { "buildType": true, "testPreset": "UnitTest" }
@@ -62,7 +62,7 @@
             "description": "Integration tests on board (Unity on target, INTEGRATION_TEST_BOARD selects board pins). ARM toolchain and unity replace the artifacts list of project ArtifactsConfig.txt",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "IntegrationTest",
-                "ARTIFACTS_HANDLER_REQ_LIST": "ninja;1.12.0;latest,gcc-arm-none-eabi;latest;latest,unity;latest;latest,probe-rs;latest;latest"
+                "ARTIFACTS_HANDLER_REQ_LIST": "ninja;1.12.0;latest,gcc-arm-none-eabi;latest;latest,unity;latest;latest,probe-rs;latest;latest,gcovr;latest;latest"
             },
             "vendor": {
                 "embedbits.com/EmBi": { "buildType": true, "testPreset": "IntegrationTest" }

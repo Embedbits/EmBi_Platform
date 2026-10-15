@@ -222,19 +222,22 @@ When selected, the script will display a submenu with various initialization opt
 ```
 =====================================
 0: Back to main menu
-1: Project structure initialization
-2: STM32CubeIDE project initialization
-3: VSCode project initialization
-4: BSP module - Configuration
-5: BSP module - Update version
-6: Middleware module - Configuration
-7: Middleware module - Update version
-8: Documents module - Configuration
-9: Module update (Updater)
-10: Artifacts (artifacts handler)
+1: BSP module - Configuration
+2: BSP module - Update version
+3: Middleware module - Configuration
+4: Middleware module - Update version
+5: Documents module - Configuration
+6: Module update (Updater)
+7: Artifacts (artifacts handler)
+8: STM32CubeIDE project initialization
+9: VSCode project initialization
 =====================================
-Enter your selection (0-10):
+Enter your selection (0-9):
 ```
+
+The project structure (`ArtifactsConfig.txt`, `CMakeLists.txt`, `CMakePresets.json` and the `Application` layer) is
+initialized at the beginning of *BSP module - Configuration* (`Prj_Handler.cmake`, `App_ModuleHandler.cmake`), before
+the BSP itself is composed. Already existing files are kept.
 
 ---
 
@@ -242,7 +245,14 @@ Enter your selection (0-10):
 
 Generates the VSCode configuration of the project (`Prj_Handler/Prj_VSCode_Handler.cmake`) into `.vscode/`.
 The script lists MCUs of the project presets and asks for MCUs of the debug configurations (IDs separated by
-comma, `0` = all MCUs, empty = MCUs of the connected boards).
+comma, `0` = all MCUs). The initialization does not access any hardware and does not run probe-rs - the MCUs are
+selected by the user. The MCUs come from `Bsp/Ral/RalPresets.json`; if the BSP
+module is not configured yet, the option informs about it and offers a return to the menu.
+
+After the MCU selection the script asks for the firmware name (without spaces and build type, empty = the current
+name is kept). The name is written to `set(PROJECT_NAME ...)` of the root `CMakeLists.txt` as
+`<name>_${CMAKE_BUILD_TYPE}` and the debug configurations and the flash task use the firmware
+`<name>_<build type>.elf`.
 
 ```
 .vscode/
@@ -272,23 +282,51 @@ Debug configurations of every selected MCU (debug adapter of the probe-rs extens
 - `EmBi: Attach <MCU>` - attaches to the running firmware without flashing
 - `EmBi: Debug integration test <MCU>` - flashes an integration test firmware selected from the list (built by the
   task *Integration tests*)
-- `EmBi: Debug unit test` - host gdb (gcc artifact) debugging of a unit test executable (built by the task
+- `EmBi: Debug unit test <MCU>` - host gdb (gcc artifact) debugging of a unit test executable (built by the task
   *Unit tests*)
 
 probe-rs configurations have RTT enabled - RTT channels of the firmware (SEGGER RTT control block) are shown in the
 terminal of the debug session. Firmware output over ST-LINK VCP (USART) is read by the recommended Serial Monitor
 extension.
 
-The probe-rs chip of the MCU is the board chip of `IntegrationTestBoards.json` (`INTEGRATION_TEST_PROBE_RS_CHIP`),
-the device of the MCU identification of `Bsp/Ral/RalPresets.json` or the MCU name - the first one probe-rs knows.
-The probe is taken from the detection of connected boards and the SVD file (peripheral registers view) from the
-project (`Bsp/`, `EmBi_Platform/Docs/`) or STM32Cube packs of the STM32 VSCode extension, if found. If the SVD file is
-missing and the STM32Cube extension is installed, the device family pack of the MCU (e.g.
-`STMicroelectronics.stm32f4xx_dfp`) is installed by `cube pack install`.
+The probe is not written to `launch.json` (it is selected by the debug adapter). `launch.json` contains no path of
+probe-rs: the probe-rs configurations start the debug adapter through CMake (`"runtimeExecutable": "cmake"`,
+`Prj_Handler/Prj_VSCode_ProbeRs.cmake`), which runs the probe-rs artifact of the artifacts cache with the arguments of
+the extension (probe-rs of the system is not used). The artifact is downloaded by the artifacts handler by the
+`preLaunchTask` of the configuration (`EmBi: Provide probe-rs`, a part of the hidden task `EmBi: Prepare <MCU>_Debug`
+of the debug configuration), because the extension waits only 5 s for the debug adapter.
+
+The generated files contain no static values of the project - the lists of MCUs, boards and test sets of the tasks and
+the chip, the SVD file, the firmware files, the lists of tests and the gdb of the debug configurations are inputs resolved by CMake when
+the task or the debug configuration is started (extension *Tasks Shell Input*, `augustocdias.tasks-shell-input`, which runs
+`Prj_VSCode_Handler.cmake`). A new test, a new MCU or a changed firmware name is used without the initialization:
+
+| Function (`-DFUNCTION_ID=`) | Used by | Output |
+|-----------------------------|---------|--------|
+| `PICK_MCU` | tasks | MCUs of the project presets |
+| `PICK_BOARD` | tasks | boards of the project boards file, boards named by MCU, all connected boards |
+| `PICK_TEST_SET` (`-DTEST_TYPE=UT/IT`) | tasks | test sets = names of the tests registered in the project (the first option = all) |
+| `DEBUG_CHIP` (`-DMCU=`) | debug | probe-rs chip: board chip of `IntegrationTestBoards.json`, device of the MCU identification of `Bsp/Ral/RalPresets.json` or the MCU name (the first one probe-rs knows if the artifact is in the cache, otherwise the first defined) |
+| `DEBUG_SVD` (`-DMCU=`) | debug | SVD file of the MCU (peripheral registers of the debugger, `coreConfigs[].svdFile`) from the Ral module `Svd` of the BSP (`Bsp/Ral/Svd/<Device>.svd`): the file `Bsp/Ral/Svd/Devices.csv` (`Device;Core;File;Pack`, generated by the importer from the pack descriptions of ST) assigns the file to a device, the device is the one of the MCU identification of `Bsp/Ral/RalPresets.json`, otherwise the first device whose name matches the MCU (`x` of the MCU name = any character). No file of the host is used. An MCU without an SVD file (BSP without the module `Svd`, a device ST delivers no SVD file for) prints the expected path with a warning, the debugger runs without the peripheral registers. The row of the core 0 is used (a multi core device, e.g. STM32H745, has a row per core, ordered by the access port) |
+| `DEBUG_FIRMWARE` (`-DMCU=`) | debug | firmware file: build directory of the preset and the firmware name of the root `CMakeLists.txt` (the same file the flash task uses) |
+| `DEBUG_TESTS` (`-DTEST_TYPE=UT/IT -DMCU=`) | debug | test executables of the MCU registered in the project (`Build/<MCU>_<UnitTest|IntegrationTest>`; unit tests need the build of the task *Unit tests*) |
+| `DEBUG_GDB` (`-DMCU=`) | debug | host gdb of the artifact `gdb`, otherwise `gcc`, in the version configured for the unit test preset of the MCU; gdb of the system is not used |
+
+The generated configuration uses VSCode extensions (CMake Tools, C/C++, probe-rs Debugger, Serial Monitor and
+*Tasks Shell Input*, without which the tasks and debug configurations with inputs do not start - `shellCommand.execute not
+found`). The initialization checks the extension folders of VSCode (`~/.vscode/extensions`, Insiders, VSCodium, Cursor, remote
+server; extensions in `.obsolete` count as uninstalled) and lists the missing ones; the Setup menu then offers their
+installation by the `code` command (`EXTENSIONS_CHECK` prints the missing extensions, `EXTENSIONS_INSTALL` installs
+them - nothing is installed without the answer of the user).
+
+Only the build types (`Debug`, `Release`) are a fixed list. The system requirements are CMake and git, every other tool
+(probe-rs, gdb, compilers) is an artifact of the artifacts cache **in the version configured for the preset**
+(`ARTIFACTS_HANDLER_REQ_LIST` of the preset of the MCU or `ArtifactsConfig.txt`, see `ArtifactsHandler/README.md`,
+*ArtifactsResolver*): probe-rs by the integration test preset of the MCU, gdb by the unit test preset of the MCU. The
+newest version found in the cache is never used instead of the configured one.
 
 Generated files start with the comment `// Generated by EmBi_Platform Setup ...`. Existing files without it are kept
-as `<file>.bak`. Repeat the initialization after change of MCUs, boards, test sets, probe-rs version or when the
-boards are connected to other probes.
+as `<file>.bak`. Repeat the initialization after change of the MCUs of the debug configurations.
 
 ---
 
@@ -359,7 +397,7 @@ Enter your selection (0-3):
   environment variable `ARTIFACTS_HANDLER_CACHE_PATH`, `ArtifactsConfig.txt` for the host system or the default folder of the handler)
   and the required artifacts with the Bin / Core versions installed in the cache.
 
-The project needs `ArtifactsConfig.txt` in its root folder (created by *Project structure initialization*). The actions are in
+The project needs `ArtifactsConfig.txt` in its root folder (created by *BSP module - Configuration*). The actions are in
 `Artifacts_Handler/Artifacts_Menu.cmake` and can be started without the menu:
 
 ```bash

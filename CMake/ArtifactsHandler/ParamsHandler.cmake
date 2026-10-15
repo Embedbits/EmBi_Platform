@@ -25,8 +25,6 @@ function(ParamsHandler_Get_ArtifactsList ARTIFACTS_LIST_STRING_ARG
         message(FATAL_ERROR "List of Required Artifacts is empty.")
     endif()
 
-    message(STATUS "List of artifacts: ${ARTIFACTS_LIST_STRING_ARG}")
-
     # Version separator ';' is replaced, so the artifacts can be split by ','
     string(REPLACE ";" "|" ARTIFACTS_STRING "${ARTIFACTS_LIST_STRING_ARG}")
     string(REPLACE " " ""  ARTIFACTS_STRING "${ARTIFACTS_STRING}")

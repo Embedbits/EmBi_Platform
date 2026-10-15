@@ -64,6 +64,31 @@
 #                                   Devices with small flash (STM32H7R / STM32H7S: 64 KB) use
 #                                   -Os, the firmware of bigger test sets does not fit at -O0.
 #   INTEGRATION_TEST_RUN_KNOWN_DEFECTS - Execute tests marked by IT_KNOWN_DEFECT
+#   INTEGRATION_TEST_COVERAGE     - OFF (default) / ON: code coverage (gcov) of the tested modules
+#                                   (Coverage/Coverage.cmake, ItCore/IntegrationTesting_Coverage.h).
+#                                   The libraries under test (COVERAGE_LIBS of the test set,
+#                                   default <NAME>_Lib) are compiled with the gcov instrumentation,
+#                                   the firmware serializes the counters after the last test case,
+#                                   "<NAME>.Run" reads them and converts them to .gcda files of the
+#                                   build folder. Targets:
+#                                     IntegrationTest_Coverage        report (HTML, Cobertura XML, JSON)
+#                                     IntegrationTest_CoverageSummary table of the last report
+#                                     IntegrationTest_CoverageMerge   converts the stored data again
+#                                     IntegrationTest_CoverageReset   deletes the counters of earlier runs
+#                                   Needs the artifact "gcovr" and the gcov and gcov-tool of the compiler.
+#   INTEGRATION_TEST_COVERAGE_CTEST_REPORT - ON (default) / OFF: with the coverage ctest creates the
+#                                   report and prints the table of the coverage after the last test
+#                                   (CTestCustom.cmake of the build folder); scripts which create the
+#                                   report themselves switch it OFF
+#   INTEGRATION_TEST_COVERAGE_SIZE - Size of the buffer of the coverage data in RAM of the firmware
+#                                   [B] (default 49152: the data are about 1.4 times the counters of the
+#                                   instrumented code, up to 33 kB for the biggest test sets of
+#                                   STM32F722xE; a device with a small RAM needs a smaller value and
+#                                   fewer instrumented libraries - the counters take RAM too)
+#   INTEGRATION_TEST_COVERAGE_ROOT - Root of the sources in the coverage report (default: source
+#                                   folder of the project)
+#   INTEGRATION_TEST_COVERAGE_MIN_LINES - Required line coverage in percent, the report fails below
+#                                   it (default 0 = not checked)
 #
 # Registration in module CMakeLists.txt (same principle as unit tests):
 #   if(INTEGRATION_TESTING_AVAILABLE STREQUAL "ON")
@@ -81,6 +106,8 @@
 #                                           # module under test, ...)
 #       TIMEOUT       30                    # Execution timeout of all test cases [s]
 #       CASE_TIMEOUT  5                     # Timeout of one test case [s]
+#       COVERAGE_LIBS Gpio_Lib              # Libraries under test for INTEGRATION_TEST_COVERAGE
+#                                           # (default <NAME>_Lib)
 #   )
 #   CTest: "<NAME>.Run" executes the firmware (fixture), every
 #   "void It_...( void )" function is registered as "<NAME>.<function>".
@@ -133,6 +160,19 @@ set(INTEGRATION_TEST_CASE_TIMEOUT       "10"
 
 option(INTEGRATION_TEST_RUN_KNOWN_DEFECTS "Execute tests of known defects (IT_KNOWN_DEFECT) instead of ignoring them" OFF)
 
+option(INTEGRATION_TEST_COVERAGE        "Code coverage (gcov) of the tested modules" OFF)
+
+option(INTEGRATION_TEST_COVERAGE_CTEST_REPORT "ctest prints the table of the coverage after the tests (with INTEGRATION_TEST_COVERAGE)" ON)
+
+set(INTEGRATION_TEST_COVERAGE_SIZE      "49152"
+    CACHE STRING                        "Size of the buffer of the coverage data in RAM of the firmware [B]")
+
+set(INTEGRATION_TEST_COVERAGE_ROOT      "${CMAKE_SOURCE_DIR}"
+    CACHE PATH                          "Root of the sources in the coverage report")
+
+set(INTEGRATION_TEST_COVERAGE_MIN_LINES "0"
+    CACHE STRING                        "Required line coverage in percent (0 = not checked)")
+
 set(INTEGRATION_TEST_OPTIMIZATION       "${OPTIMIZATION_NONE}"
     CACHE STRING                        "Optimization option of the test firmware (-O0 default, -Og / -Os for devices with small flash)")
 
@@ -153,13 +193,18 @@ endif()
 
 set(UNITY_ROOT "${UNITY_ROOT}" CACHE PATH "Unity root folder" FORCE)
 
-if(NOT PROBE_RS_EXECUTABLE)
-    find_program(PROBE_RS_EXECUTABLE NAMES probe-rs)
-endif()
-
+# probe-rs comes from the artifact (PROBE_RS_EXECUTABLE is exported by the artifact
+# initialization) or from the parameter - probe-rs installed in the system (PATH)
+# is not searched.
 if(NOT PROBE_RS_EXECUTABLE)
     message(WARNING "probe-rs not found. Test firmware is built, but tests cannot be executed. "
                     "Add the artifact 'probe-rs' or pass -DPROBE_RS_EXECUTABLE=<path>.")
+endif()
+
+# gcovr of the coverage report (artifact "gcovr")
+if(INTEGRATION_TEST_COVERAGE)
+    include("${INTEGRATION_TESTING_DIR}/../Coverage/Coverage.cmake")
+    Coverage_Provide_Gcovr(INTEGRATION_TEST_COVERAGE)
 endif()
 
 #============================ Board parameters ================================#
@@ -340,6 +385,43 @@ target_link_libraries(ItCore
         unity
 )
 
+# Coverage of the tested code: serialization of the gcov counters after the last test case
+if(INTEGRATION_TEST_COVERAGE)
+
+    target_sources(ItCore
+        PRIVATE
+            ${INTEGRATION_TESTING_DIR}/ItCore/IntegrationTesting_Coverage.c
+    )
+
+    target_compile_definitions(ItCore
+        PRIVATE
+            IT_COVERAGE
+            IT_COVERAGE_SIZE=${INTEGRATION_TEST_COVERAGE_SIZE}u
+    )
+
+    # Instrumentation of the libraries under test. -fprofile-info-section: no constructors, the
+    # firmware registers the gcov information in the linker section .gcov_info; -fdata-sections:
+    # the counters are in own sections (.bss.__gcov0.<function>), which the linker script
+    # IntegrationTesting_GcovCounters.ld keeps over reset. The prefix maps make the names in the
+    # .gcno / .gcda files relative to the project (the sources) and to the build folder, so
+    # the data can be evaluated in another folder or on another machine than the one which built the
+    # firmware (the coverage stage of a pipeline). The more specific map is the last one.
+    set(IT_COVERAGE_COMPILE_OPTIONS
+        --coverage
+        -fprofile-info-section
+        -fdata-sections
+        "-fprofile-prefix-map=${CMAKE_SOURCE_DIR}=."
+        "-fprofile-prefix-map=${CMAKE_BINARY_DIR}=."
+    )
+
+    set(IT_COVERAGE_LINK_OPTIONS
+        --coverage
+        "-Wl,-T,${INTEGRATION_TESTING_DIR}/ItCore/IntegrationTesting_GcovInfo.ld"
+        "-Wl,-T,${INTEGRATION_TESTING_DIR}/ItCore/IntegrationTesting_GcovCounters.ld"
+    )
+
+endif()
+
 #================================ Functions ===================================#
 
 #------------------------------------------------------------------------------#
@@ -399,6 +481,9 @@ function(IntegrationTesting_Generate)
         message(WARNING "No integration tests registered (IntegrationTesting_AddPath not called by any module).")
     endif()
 
+    # Coverage targets of all tests
+    integrationTesting_CoverageTargets()
+
 endfunction(IntegrationTesting_Generate)
 
 
@@ -430,6 +515,147 @@ endfunction(integrationTesting_ExcludeFromAll)
 
 
 #------------------------------------------------------------------------------#
+# Prepares the firmware of the test for the coverage: the libraries under test are
+# compiled with the gcov instrumentation (once, a library is shared by the firmwares)
+# and the firmware gets libgcov and the linker scripts of the coverage.
+#
+# TEST_TARGET   [in]: Test firmware
+# IT_NAME       [in]: Name of the test (the default library under test is <IT_NAME>_Lib)
+# COVERAGE_LIBS [in]: Libraries under test ("" = <IT_NAME>_Lib)
+#------------------------------------------------------------------------------#
+function(integrationTesting_Instrument TEST_TARGET IT_NAME COVERAGE_LIBS)
+
+    if("${COVERAGE_LIBS}" STREQUAL "")
+        set(COVERAGE_LIBS "${IT_NAME}_Lib")
+    endif()
+
+    get_property(INSTRUMENTED_LIBS GLOBAL PROPERTY INTEGRATION_TESTING_INSTRUMENTED_LIBS)
+
+    set(FOUND_LIBS 0)
+
+    foreach(COVERAGE_LIB IN LISTS COVERAGE_LIBS)
+
+        if(NOT TARGET ${COVERAGE_LIB})
+            message(STATUS "Coverage of ${TEST_TARGET}: library ${COVERAGE_LIB} does not exist - not instrumented.")
+            continue()
+        endif()
+
+        if(NOT "${COVERAGE_LIB}" IN_LIST INSTRUMENTED_LIBS)
+            target_compile_options(${COVERAGE_LIB} PRIVATE ${IT_COVERAGE_COMPILE_OPTIONS})
+            set_property(GLOBAL APPEND PROPERTY INTEGRATION_TESTING_INSTRUMENTED_LIBS "${COVERAGE_LIB}")
+        endif()
+
+        math(EXPR FOUND_LIBS "${FOUND_LIBS} + 1")
+
+    endforeach()
+
+    if(FOUND_LIBS EQUAL 0)
+        message(WARNING "Coverage of ${TEST_TARGET}: no library under test (${COVERAGE_LIBS}) - the report will not "
+                        "contain the code of the test. List the libraries by COVERAGE_LIBS of the test set.")
+    endif()
+
+    target_link_options(${TEST_TARGET} PRIVATE ${IT_COVERAGE_LINK_OPTIONS})
+
+    # The firmware is linked again when a linker script of the coverage changes
+    set_property(TARGET ${TEST_TARGET} APPEND PROPERTY LINK_DEPENDS
+        "${INTEGRATION_TESTING_DIR}/ItCore/IntegrationTesting_GcovInfo.ld"
+        "${INTEGRATION_TESTING_DIR}/ItCore/IntegrationTesting_GcovCounters.ld")
+
+endfunction(integrationTesting_Instrument)
+
+
+#------------------------------------------------------------------------------#
+# Creates the coverage targets of the integration tests (INTEGRATION_TEST_COVERAGE=ON),
+# see Coverage.cmake: IntegrationTest_Coverage, IntegrationTest_CoverageSummary,
+# IntegrationTest_CoverageReset and IntegrationTest_CoverageMerge (converts the stored
+# coverage data of the firmwares to .gcda files again).
+# Called by IntegrationTesting_Generate() after all tests are created.
+#------------------------------------------------------------------------------#
+function(integrationTesting_CoverageTargets)
+
+    if(NOT INTEGRATION_TEST_COVERAGE)
+        return()
+    endif()
+
+    Coverage_Find_Gcov(GCOV "${CMAKE_C_COMPILER}" "${CMAKE_C_COMPILER_ID}")
+
+    if(NOT GCOV)
+        message(FATAL_ERROR "INTEGRATION_TEST_COVERAGE is ON but gcov of the compiler ${CMAKE_C_COMPILER} was not found "
+                            "next to it (gcov of another compiler gives wrong data).")
+    endif()
+
+    # gcov-tool and objcopy of the same toolchain (arm-none-eabi-gcc -> arm-none-eabi-gcov-tool,
+    # arm-none-eabi-objcopy): they convert the coverage data read from the target
+    get_filename_component(COMPILER_DIR  "${CMAKE_C_COMPILER}" DIRECTORY)
+    get_filename_component(COMPILER_FILE "${CMAKE_C_COMPILER}" NAME)
+
+    string(REGEX REPLACE "\\.exe$" "" COMPILER_FILE "${COMPILER_FILE}")
+
+    foreach(TOOL IN ITEMS gcov-tool objcopy)
+
+        string(REGEX REPLACE "gcc(-[0-9.]+)?$" "${TOOL}\\1" TOOL_NAME "${COMPILER_FILE}")
+        string(MAKE_C_IDENTIFIER "${TOOL}" TOOL_ID)
+
+        find_program(IT_TOOL_${TOOL_ID} NAMES "${TOOL_NAME}" HINTS "${COMPILER_DIR}" NO_DEFAULT_PATH NO_CACHE)
+
+        if(NOT IT_TOOL_${TOOL_ID})
+            message(FATAL_ERROR "INTEGRATION_TEST_COVERAGE is ON but ${TOOL_NAME} was not found next to the compiler ${CMAKE_C_COMPILER}.")
+        endif()
+
+    endforeach()
+
+    set(GCOV_TOOL    "${IT_TOOL_gcov_tool}")
+    set(OBJCOPY_TOOL "${IT_TOOL_objcopy}")
+
+    message(STATUS "gcov:      ${GCOV}")
+    message(STATUS "gcov-tool: ${GCOV_TOOL}")
+    message(STATUS "objcopy:   ${OBJCOPY_TOOL}")
+
+    # Conversion of the coverage data by "<NAME>.Run" (tools of the host configuration)
+    file(APPEND "${INTEGRATION_TEST_HOST_CONFIG}"
+"set(IT_COVERAGE_MERGE [==[ON]==])
+set(IT_OBJCOPY    [==[${OBJCOPY_TOOL}]==])
+set(IT_GCOV_TOOL  [==[${GCOV_TOOL}]==])
+set(IT_BUILD_DIR  [==[${CMAKE_BINARY_DIR}]==])
+")
+
+    # Test sources and the target library of the vendor are not reported
+    set(COVERAGE_EXCLUDES ".*/Tests/.*" ".*/Ral/.*")
+
+    set(COVERAGE_CTEST_REPORT "")
+
+    if(INTEGRATION_TEST_COVERAGE_CTEST_REPORT)
+        set(COVERAGE_CTEST_REPORT CTEST_REPORT)
+    endif()
+
+    Coverage_Add_Targets(
+        ${COVERAGE_CTEST_REPORT}
+        PREFIX      IntegrationTest
+        TITLE       "Integration tests coverage - ${CMAKE_PROJECT_NAME}"
+        GCOV        "${GCOV}"
+        ROOT        "${INTEGRATION_TEST_COVERAGE_ROOT}"
+        SEARCH_DIRS "${CMAKE_BINARY_DIR}"
+        EXCLUDES    ${COVERAGE_EXCLUDES}
+        MIN_LINES   "${INTEGRATION_TEST_COVERAGE_MIN_LINES}"
+        RELATIVE_PATHS
+    )
+
+    get_property(COVERAGE_DUMPS GLOBAL PROPERTY INTEGRATION_TESTING_COVERAGE_DUMPS)
+
+    add_custom_target(IntegrationTest_CoverageMerge
+        COMMAND "${CMAKE_COMMAND}"
+                "-DIT_COV_DUMPS=${COVERAGE_DUMPS}"
+                "-DIT_COV_BUILD_DIR=${CMAKE_BINARY_DIR}"
+                "-DIT_OBJCOPY=${OBJCOPY_TOOL}"
+                "-DIT_GCOV_TOOL=${GCOV_TOOL}"
+                -P "${INTEGRATION_TESTING_DIR}/IntegrationTesting_Coverage.cmake"
+        COMMENT "Converting the stored coverage data of the integration tests"
+        VERBATIM
+    )
+
+endfunction(integrationTesting_CoverageTargets)
+
+#------------------------------------------------------------------------------#
 # Creates integration test firmware and registers its test cases in CTest.
 #
 # Generates Unity runner of TEST_SOURCE (CMake, no Ruby needed), builds
@@ -445,7 +671,7 @@ function(IntegrationTesting_Add_Test)
     cmake_parse_arguments(IT
         ""
         "NAME;TEST_SOURCE;TIMEOUT;CASE_TIMEOUT"
-        "SOURCES;INCLUDE_DIRS;DEFINITIONS;LINK_LIBS"
+        "SOURCES;INCLUDE_DIRS;DEFINITIONS;LINK_LIBS;COVERAGE_LIBS"
         ${ARGN})
 
     if(NOT IT_NAME OR NOT IT_TEST_SOURCE)
@@ -557,6 +783,22 @@ function(IntegrationTesting_Add_Test)
         VERBATIM
     )
 
+    # Coverage of the libraries under test: instrumentation, linker scripts, the file with the
+    # coverage data read from the target
+    set(COVERAGE_DUMP_ARGUMENT "")
+
+    if(INTEGRATION_TEST_COVERAGE)
+
+        integrationTesting_Instrument(${TEST_TARGET} "${IT_NAME}" "${IT_COVERAGE_LIBS}")
+
+        set(COVERAGE_DUMP "${CMAKE_CURRENT_BINARY_DIR}/${TEST_TARGET}.cov.ihex")
+
+        set(COVERAGE_DUMP_ARGUMENT "-DIT_COVERAGE_DUMP=${COVERAGE_DUMP}")
+
+        set_property(GLOBAL APPEND PROPERTY INTEGRATION_TESTING_COVERAGE_DUMPS "${COVERAGE_DUMP}")
+
+    endif()
+
     # Execution of the firmware on target (fixture of all test cases)
     add_test(NAME "${IT_NAME}.Run"
              COMMAND ${CMAKE_COMMAND}
@@ -566,6 +808,7 @@ function(IntegrationTesting_Add_Test)
                      "-DIT_CONFIG=${INTEGRATION_TEST_HOST_CONFIG}"
                      "-DIT_TIMEOUT=${IT_TIMEOUT}"
                      "-DIT_CASE_TIMEOUT=${IT_CASE_TIMEOUT}"
+                     ${COVERAGE_DUMP_ARGUMENT}
                      -P "${INTEGRATION_TESTING_DIR}/IntegrationTesting_Run.cmake")
 
     math(EXPR RUN_TIMEOUT "${IT_TIMEOUT} + 60")

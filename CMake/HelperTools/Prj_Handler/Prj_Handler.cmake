@@ -36,6 +36,10 @@ include("${SYSTEM_CONFIG_FILE_PATH}")
 # Read project root folder path
 SysConfig_Get_ProjectRootPath(PROJECT_ROOT_PATH)
 
+# Folder of the templates (CMAKE_CURRENT_LIST_DIR inside of a function is the
+# folder of the file, which calls it - the function can be called from other handlers)
+set(PRJ_HANDLER_TEMPLATES_PATH "${CMAKE_CURRENT_LIST_DIR}")
+
 
 # ------------------------------------------------------------------------------
 # Function: ProjectStructureInit_ProjectRootInit
@@ -50,20 +54,20 @@ SysConfig_Get_ProjectRootPath(PROJECT_ROOT_PATH)
 function(ProjectStructureInit_ProjectRootInit)
 
     if(NOT EXISTS "${PROJECT_ROOT_PATH}/CMakeLists.txt")
-        file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/Template_CMakeLists.txt.in"
+        file(COPY_FILE "${PRJ_HANDLER_TEMPLATES_PATH}/Template_CMakeLists.txt.in"
             "${PROJECT_ROOT_PATH}/CMakeLists.txt"
             ONLY_IF_DIFFERENT)
     endif()
         
     if(NOT EXISTS "${PROJECT_ROOT_PATH}/ArtifactsConfig.txt")
-        file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/Template_ArtifactsConfig.txt.in"
+        file(COPY_FILE "${PRJ_HANDLER_TEMPLATES_PATH}/Template_ArtifactsConfig.txt.in"
             "${PROJECT_ROOT_PATH}/ArtifactsConfig.txt"
             ONLY_IF_DIFFERENT)
     endif()
 
     # Presets of MCU targets are added by BSP configuration (Prj_PresetsHandler)
     if(NOT EXISTS "${PROJECT_ROOT_PATH}/CMakePresets.json")
-        file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/Template_CMakePresets.json.in"
+        file(COPY_FILE "${PRJ_HANDLER_TEMPLATES_PATH}/Template_CMakePresets.json.in"
             "${PROJECT_ROOT_PATH}/CMakePresets.json"
             ONLY_IF_DIFFERENT)
     endif()

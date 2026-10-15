@@ -46,44 +46,6 @@ Setup.bat
 
 The script will display a **menu with several options**. To initialize a new project, **choose the option "Configuration"** by typing its corresponding number. Several sub-options will be shown, described below.
 
-#### Option: `Initialize project necessary files`
-
-> **This has to be executed once during first project initialization.**
-
-This option will copy user-managed files into the project.
-
-##### CMakeLists.txt
-
-The project root CMakeLists file. User can add pre- and post-build steps, specify required build flags and user functionality.
-
-##### ArtifactsConfig.txt
-
-The artifactory handler configuration file. User can specify required artifacts, their versions and subversion, using the syntax:
-
-```
-<artifact_name>;<binary_version>;<handler_version>
-```
-
-Example:
-```
-ninja;1.12.1;1
-gcc-arm-none-eabi;13.2.rel1;2
-```
-
-#### Option: `Initialize STM32CubeIDE project`
-
-This option will copy STM32CubeIDE project files into the project repository (the top-level `STM32CubeIDE/` folder — see [Project Structure](#project-structure) for how this relates to the template copy shipped inside `EmBi_Platform/STM32CubeIDE`).
-
-#### Option: `Initialize VSCode project`
-
-This option generates the VSCode configuration of the project (`.vscode/`): tasks for build, flashing, unit tests and integration tests, probe-rs debug configurations of the selected MCUs (firmware, attach, integration test firmware), gdb debugging of unit tests, CMake Tools / IntelliSense settings and recommended extensions. See [Project tools](CMake/HelperTools/README.md#vscode-project-initialization).
-
-#### Option: `Configure application layer`
-
-> **This has to be executed once during first project initialization.**
-
-The application module folder structure will be generated, application main entry point header and function files are copied.
-
 #### Option: `Configure BSP module`
 
 > **This has to be executed once during first project initialization or during MCU family change.**
@@ -105,6 +67,11 @@ Enter branch ID (numerical):
 Enter the corresponding number of your desired MCU family (e.g., `0` for the STM32G4 family). Entries suffixed `_Dev` track the family's development branch; `master` tracks the latest unreleased BSP changes across all families and is intended for platform development/testing rather than production projects.
 
 After the MCU family is selected, the setup script automatically:
+- Initializes the **project structure** first (files which already exist are kept), so the project is complete as soon as its CMake presets appear:
+  - `CMakeLists.txt` - the project root CMakeLists file. User can add pre- and post-build steps, specify required build flags and user functionality.
+  - `ArtifactsConfig.txt` - the artifactory handler configuration file. User can specify required artifacts, their versions and subversion, using the syntax `<artifact_name>;<binary_version>;<handler_version>`, e.g. `ninja;1.12.1;1`, `gcc-arm-none-eabi;13.2.rel1;2`.
+  - `CMakePresets.json` - the project CMake presets (the MCU presets are added at the end of the BSP configuration).
+  - `Application` - the application module folder structure is generated, application main entry point header and function files are copied.
 - Adds all required **BSP submodules**
 - Checks out the correct **branches and commits** - every submodule follows the branch of the commit the BSP family pins
 - Composes **Bsp/Mcal** from the peripheral repositories (Rcc, Gpio, ...) of the Mcal branch of the same name - or, when Mcal has no such branch, of the Mcal branch the BSP family pins, so a family can use the Mcal of another one (e.g. BSP `Releases/STM32H7RS` uses Mcal `Releases/STM32H7`)
@@ -176,6 +143,16 @@ cmake -DFUNCTION_ID=UPDATE -DUPDATE_FROM_VERSION=0.0.2 -DUPDATE_BRANCHES="Dev/ST
 ```
 
 All parameters are described in the header of the main functionality in `Updater.cmake`.
+
+#### Option: `Initialize STM32CubeIDE project`
+
+This option will copy STM32CubeIDE project files into the project repository (the top-level `STM32CubeIDE/` folder — see [Project Structure](#project-structure) for how this relates to the template copy shipped inside `EmBi_Platform/STM32CubeIDE`).
+
+#### Option: `Initialize VSCode project`
+
+This option generates the VSCode configuration of the project (`.vscode/`): tasks for build, flashing, unit tests and integration tests, probe-rs debug configurations of the selected MCUs (firmware, attach, integration test firmware), gdb debugging of unit tests, CMake Tools / IntelliSense settings and recommended extensions. See [Project tools](CMake/HelperTools/README.md#vscode-project-initialization). The BSP module has to be configured first (the MCUs are taken from its Ral presets) - otherwise the option informs about it and offers a return to the menu.
+
+After the MCUs of the debug configurations are selected, the script asks for the **firmware name** (without spaces and build type, empty = the current name is kept). The name is written to `set(PROJECT_NAME ...)` of the project root `CMakeLists.txt` as `<name>_${CMAKE_BUILD_TYPE}`, so the firmware is built, flashed and debugged as `<name>_<build type>.elf`.
 
 ---
 

@@ -33,6 +33,13 @@
 # the test set can be selected by name (BUILD with MCU, TEST) - used by tasks
 # of the VSCode project (Prj_VSCode_Handler.cmake).
 #
+# Code coverage (-DTEST_COVERAGE=ON of TEST_BUILD, TEST_RUN, TEST): the tests are built with the
+# gcov instrumentation of the tested code (UNIT_TEST_COVERAGE / INTEGRATION_TEST_COVERAGE, see
+# Coverage/Coverage.cmake), the counters of earlier runs are deleted, after the tests the
+# report is created (HTML, Cobertura XML, JSON in Build/<preset>/Coverage) and the table of the
+# coverage by modules is printed. FUNCTION_ID=TEST_COVERAGE prints the table of the last report
+# again. Not available for the integration tests on all connected boards.
+#
 # ==============================================================================
 
 
@@ -77,6 +84,15 @@ endif()
 if(NOT DEFINED BUILD_CLEAN)
     set(BUILD_CLEAN OFF)
 endif()
+
+# Code coverage of the tests (instrumented build, report after the tests)
+if(NOT DEFINED TEST_COVERAGE)
+    set(TEST_COVERAGE OFF)
+endif()
+
+# Prefix of the coverage targets of the framework (UnitTest_Coverage, IntegrationTest_Coverage, ...)
+set(BUILD_HANDLER_COVERAGE_PREFIX_UT "UnitTest")
+set(BUILD_HANDLER_COVERAGE_PREFIX_IT "IntegrationTest")
 
 
 #===============================================================================
@@ -370,7 +386,8 @@ function(Build_Handler_GetTestPreset IN_TEST_TYPE IN_TARGET_ID OUT_PRESET OUT_AR
         Build_Handler_GetListItem("${MCU_LIST}" "${IN_TARGET_ID}" "MCU" MCU)
 
         set(PRESET "${MCU}_UnitTest")
-        set(ARGS   "")
+        # The report and the table are printed by Setup itself after the tests
+        set(ARGS   "-DUNIT_TEST_COVERAGE=${TEST_COVERAGE};-DUNIT_TEST_COVERAGE_CTEST_REPORT=OFF")
         set(TARGET "${MCU}")
 
     elseif("${IN_TEST_TYPE}" STREQUAL "IT")
@@ -381,7 +398,7 @@ function(Build_Handler_GetTestPreset IN_TEST_TYPE IN_TARGET_ID OUT_PRESET OUT_AR
         list(FIND BOARD_LIST "${BOARD}" BOARD_INDEX)
         list(GET PRESET_LIST ${BOARD_INDEX} PRESET)
 
-        set(ARGS   "-DINTEGRATION_TEST_BOARD=${BOARD};-DINTEGRATION_TEST_BOARDS_FILE=${BUILD_HANDLER_BOARDS_FILE}")
+        set(ARGS   "-DINTEGRATION_TEST_BOARD=${BOARD};-DINTEGRATION_TEST_BOARDS_FILE=${BUILD_HANDLER_BOARDS_FILE};-DINTEGRATION_TEST_COVERAGE=${TEST_COVERAGE};-DINTEGRATION_TEST_COVERAGE_CTEST_REPORT=OFF")
         set(TARGET "${BOARD}")
 
     else()
@@ -755,6 +772,10 @@ function(Build_Handler_TestBuild IN_TEST_TYPE IN_TARGET_ID)
 
     Build_Handler_IsAllBoards(${IN_TEST_TYPE} "${IN_TARGET_ID}" ALL_BOARDS)
 
+    if(ALL_BOARDS AND TEST_COVERAGE)
+        message(FATAL_ERROR "The code coverage is not available for the tests on all connected boards - select one board.")
+    endif()
+
     if(ALL_BOARDS)
         # Connected boards are built by IntegrationTesting_AllBoards.cmake
         Build_Handler_ConfigureAllBoards(TEST_SETS)
@@ -815,6 +836,11 @@ function(Build_Handler_TestRun IN_TEST_TYPE IN_TARGET_ID IN_TEST_ID)
     # Results of previous execution are not mixed into the summary
     file(REMOVE "${JUNIT_FILE}")
 
+    # The counters of the earlier runs are deleted: the report is the coverage of this run
+    if(TEST_COVERAGE)
+        Build_Handler_CoverageTarget(${IN_TEST_TYPE} ${PRESET} CoverageReset)
+    endif()
+
     message("=====================================")
     message("Tests: ${PRESET} (${TARGET}), ${TEST_SET}")
     message("=====================================")
@@ -827,11 +853,77 @@ function(Build_Handler_TestRun IN_TEST_TYPE IN_TARGET_ID IN_TEST_ID)
 
     Build_Handler_PrintResults("${JUNIT_FILE}" "${PRESET} (${TARGET})")
 
+    # The coverage of what ran is reported also when a test failed. The table of one test set shows
+    # the folders named like the test set (the report is the same, it contains the other sources with
+    # no executed line)
+    if(TEST_COVERAGE)
+        if(NOT "${IN_TEST_ID}" STREQUAL "0")
+            set(ENV{COV_FILTER} "/${TEST_SET}/")
+        endif()
+
+        Build_Handler_CoverageTarget(${IN_TEST_TYPE} ${PRESET} Coverage)
+
+        unset(ENV{COV_FILTER})
+    endif()
+
     if(NOT TEST_RESULT EQUAL 0)
         message(FATAL_ERROR "Tests ${PRESET} FAILED.")
     endif()
 
     message("Tests ${PRESET} PASSED")
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Build_Handler_CoverageTarget
+# Description: Builds a coverage target of the framework of the built preset
+#              (Coverage: report + table, CoverageSummary: table of the last
+#              report, CoverageReset: deletes the counters of earlier runs).
+#
+# IN_TEST_TYPE [in]: UT or IT.
+# IN_PRESET    [in]: Built preset (configured with the coverage).
+# IN_TARGET    [in]: Coverage, CoverageSummary or CoverageReset.
+# ------------------------------------------------------------------------------
+function(Build_Handler_CoverageTarget IN_TEST_TYPE IN_PRESET IN_TARGET)
+
+    set(PREFIX "${BUILD_HANDLER_COVERAGE_PREFIX_${IN_TEST_TYPE}}")
+
+    message("=====================================")
+    message("Coverage: ${IN_PRESET}, ${PREFIX}_${IN_TARGET}")
+    message("=====================================")
+    Build_Handler_Execute("Coverage target ${PREFIX}_${IN_TARGET} of ${IN_PRESET}"
+        "${CMAKE_COMMAND}" --build --preset ${IN_PRESET} --target ${PREFIX}_${IN_TARGET})
+
+    if("${IN_TARGET}" STREQUAL "Coverage")
+        message("Coverage report: ${BUILD_HANDLER_BUILD_DIR}/${IN_PRESET}/Coverage/index.html")
+    endif()
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Build_Handler_TestCoverage
+# Description: Prints the table of the coverage by modules of the last report
+#              of the MCU / board (the tests were run with TEST_COVERAGE=ON).
+#
+# IN_TEST_TYPE [in]: UT or IT.
+# IN_TARGET_ID [in]: Numerical ID of the MCU / board.
+# ------------------------------------------------------------------------------
+function(Build_Handler_TestCoverage IN_TEST_TYPE IN_TARGET_ID)
+
+    Build_Handler_IsAllBoards(${IN_TEST_TYPE} "${IN_TARGET_ID}" ALL_BOARDS)
+
+    if(ALL_BOARDS)
+        message(FATAL_ERROR "The code coverage is not available for the tests on all connected boards - select one board.")
+    endif()
+
+    Build_Handler_GetTestPreset(${IN_TEST_TYPE} "${IN_TARGET_ID}" PRESET ARGS TARGET)
+
+    if(NOT EXISTS "${BUILD_HANDLER_BUILD_DIR}/${PRESET}/Coverage/coverage-summary.json")
+        message(FATAL_ERROR "There is no coverage report of ${PRESET} - run the tests with the code coverage first.")
+    endif()
+
+    Build_Handler_CoverageTarget(${IN_TEST_TYPE} ${PRESET} CoverageSummary)
+    message("Coverage report: ${BUILD_HANDLER_BUILD_DIR}/${PRESET}/Coverage/index.html")
 endfunction()
 
 
@@ -989,6 +1081,8 @@ endfunction()
 # cmake -DFUNCTION_ID="TEST_RUN"    -DTEST_TYPE=IT -DTARGET_ID=1 -DTEST_ID=0 -P Build_Handler.cmake : Execute all test sets (0) of board 1, summary
 # cmake -DFUNCTION_ID="TEST_BUILD"  -DTEST_TYPE=IT -DTARGET_ID=<boards+1>  -P Build_Handler.cmake : Configure presets of all boards, list test sets
 # cmake -DFUNCTION_ID="TEST_RUN"    -DTEST_TYPE=IT -DTARGET_ID=<boards+1> -DTEST_ID=2 -P Build_Handler.cmake : Execute test set 2 on all connected boards, summary
+# cmake -DFUNCTION_ID="TEST_BUILD"  -DTEST_TYPE=UT -DTARGET_ID=1 -DTEST_COVERAGE=ON -P Build_Handler.cmake : Build the tests with the code coverage (TEST_RUN with it: report + table)
+# cmake -DFUNCTION_ID="TEST_COVERAGE" -DTEST_TYPE=UT -DTARGET_ID=1                  -P Build_Handler.cmake : Table of the coverage of the last report (TARGET=<name> by name)
 #
 # Selection by name (VSCode tasks), -DBUILD_CLEAN=ON for clean build (BUILD, TEST, TEST_BUILD):
 # cmake -DFUNCTION_ID="BUILD"       -DMCU=STM32F407xG -DBUILD_TYPE=Debug  -P Build_Handler.cmake : Configure and build MCU STM32F407xG
@@ -1027,6 +1121,14 @@ if(CMAKE_SCRIPT_MODE_FILE AND
     elseif("${FUNCTION_ID}" STREQUAL "TEST_TARGET_LIST")
 
         Build_Handler_PrintTestTargetList("${TEST_TYPE}")
+
+    elseif("${FUNCTION_ID}" STREQUAL "TEST_COVERAGE")
+
+        if(NOT "${TARGET}" STREQUAL "")
+            Build_Handler_GetTestTargetId("${TEST_TYPE}" "${TARGET}" TARGET_ID)
+        endif()
+
+        Build_Handler_TestCoverage("${TEST_TYPE}" "${TARGET_ID}")
 
     elseif("${FUNCTION_ID}" STREQUAL "TEST_BUILD")
 

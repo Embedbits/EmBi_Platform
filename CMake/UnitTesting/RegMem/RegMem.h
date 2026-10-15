@@ -18,9 +18,17 @@
  *       write-1-to-clear flags, read-only status bits) do not behave as HW. The
  *       test shall preset the register state the code under test expects.
  *       Sequences where HW reacts on a write (enable -> ready flag) can be
- *       emulated by HW model running in background thread
- *       (\ref RegMem_Set_ModelActive). Such tests shall be registered with
- *       RUN_SERIAL option, so the model thread is scheduled without delay.
+ *       emulated by HW model (\ref RegMem_Set_ModelActive). The model is evaluated
+ *       synchronously: the registers are write protected while a model is active, the
+ *       callback is called in the thread of the code under test right after every store
+ *       (single step of the trapped store), reads are not trapped. The reaction of the
+ *       model depends on the executed stores only (not on speed / load / CPU count of
+ *       the host), the code under test finds the flag set at the first read. On hosts
+ *       where the trap is not available (not x86-64 Linux / Windows), with a debugger
+ *       attached or with environment variable REGMEM_MODEL_MODE=thread the model runs in
+ *       a background thread (tests with a model are registered with RUN_SERIAL then).
+ *       REGMEM_MODEL_MODE=sync uses the trap also with a debugger (SIGSEGV and SIGTRAP
+ *       shall be passed to the program by the debugger).
  */
 
 #ifndef UNITTESTING_REGMEM_H
@@ -45,11 +53,25 @@ typedef enum
 /**
  * \brief HW model callback type.
  *
- * Called repeatedly from background thread while the model is active. Emulates
- * HW reaction on register writes (eg. copies RCC->CR HSEON to HSERDY). The
- * callback shall be short and shall not call Unity assertions.
+ * Emulates HW reaction on register writes (eg. copies RCC->CR HSEON to HSERDY).
+ * Synchronous mode (default): called once when the model is activated and in the thread of
+ * the code under test right after every store to the emulated registers, from a signal /
+ * exception handler. Thread mode: called repeatedly from a background thread.
+ *
+ * The callback shall be a function of the register values (level or edge), short, and
+ * shall not call Unity assertions, mocks, libc functions (printf, malloc, ...) or anything
+ * waiting for time. Registers shall be changed by atomic operations (thread mode compatible).
  */
 typedef void ( *regMem_ModelCallback_t )( void );
+
+
+/** Implementation of the active HW model */
+typedef enum
+{
+    REGMEM_MODEL_MODE_NONE = 0u, /**< No model is active                                        */
+    REGMEM_MODEL_MODE_SYNC,      /**< Synchronous model - called after every store (write trap) */
+    REGMEM_MODEL_MODE_THREAD     /**< Model called repeatedly from a background thread          */
+}   regMem_ModelMode_t;
 
 
 /** Enumeration of emulated memory regions */
@@ -90,6 +112,8 @@ regMem_RequestState_t   RegMem_Deinit       ( void );
 regMem_RequestState_t   RegMem_Set_ModelActive  ( regMem_ModelCallback_t modelCallback );
 regMem_RequestState_t   RegMem_Set_ModelInactive( void );
 regMem_RequestState_t   RegMem_Wait_ModelCycles ( uint32_t cycleCnt );
+regMem_RequestState_t   RegMem_Step_Model       ( void );
+regMem_ModelMode_t      RegMem_Get_ModelMode    ( void );
 
 #ifdef __cplusplus
 }

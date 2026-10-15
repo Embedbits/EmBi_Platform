@@ -82,40 +82,30 @@ goto MENU
 cls
 echo =====================================
 echo 0: Back to main menu
-echo 1: Project structure initialization
-echo 2: Initialize STM32CubeIDE project
-echo 3: Initialize VSCode project
-echo 4: BSP module - Configuration
-echo 5: BSP module - Update version
-echo 6: Middleware module - Configuration
-echo 7: Middleware module - Update version
-echo 8: Documents module - Configuration
-echo 9: Module update (Updater)
-echo 10: Artifacts (artifacts handler)
+echo 1: BSP module - Configuration
+echo 2: BSP module - Update version
+echo 3: Middleware module - Configuration
+echo 4: Middleware module - Update version
+echo 5: Documents module - Configuration
+echo 6: Module update (Updater)
+echo 7: Artifacts (artifacts handler)
+echo 8: Initialize STM32CubeIDE project
+echo 9: Initialize VSCode project
 echo =====================================
-set /p choice=Enter your selection (0-10):
+set /p choice=Enter your selection (0-9):
 
 if "%choice%"=="0" goto MENU
-if "%choice%"=="1" goto RUN_INIT_PROJECT
-if "%choice%"=="2" goto RUN_INIT_CUBEIDE
-if "%choice%"=="3" goto RUN_INIT_VSCODE
-if "%choice%"=="4" goto RUN_BSP_CONFIG
-if "%choice%"=="5" goto RUN_BSP_UPDATE
-if "%choice%"=="6" goto RUN_MW_CONFIG
-if "%choice%"=="7" goto RUN_MW_UPDATE
-if "%choice%"=="8" goto RUN_DOCS_INIT
-if "%choice%"=="9" goto RUN_MODULE_UPDATE
-if "%choice%"=="10" goto ARTIFACTS
+if "%choice%"=="1" goto RUN_BSP_CONFIG
+if "%choice%"=="2" goto RUN_BSP_UPDATE
+if "%choice%"=="3" goto RUN_MW_CONFIG
+if "%choice%"=="4" goto RUN_MW_UPDATE
+if "%choice%"=="5" goto RUN_DOCS_INIT
+if "%choice%"=="6" goto RUN_MODULE_UPDATE
+if "%choice%"=="7" goto ARTIFACTS
+if "%choice%"=="8" goto RUN_INIT_CUBEIDE
+if "%choice%"=="9" goto RUN_INIT_VSCODE
 
 echo Incorrect selection. Try again.
-pause
-goto INITIALIZATION
-
-
-:RUN_INIT_PROJECT
-cls
-cmake -P CMake/HelperTools/Prj_Handler/Prj_Handler.cmake
-cmake -P CMake/HelperTools/App_Handler/App_ModuleHandler.cmake
 pause
 goto INITIALIZATION
 
@@ -130,10 +120,34 @@ goto INITIALIZATION
 
 :RUN_INIT_VSCODE
 cls
+rem MCUs and debug configurations come from the Ral presets of the BSP module
+if exist "..\Bsp\Ral\RalPresets.json" goto RUN_INIT_VSCODE_START
+echo BSP module is not initialized yet - run "BSP module - Configuration" first.
+set "RETURN_ANSWER=Y"
+set /p RETURN_ANSWER=Return to the configuration menu (Y/n):
+if /i not "%RETURN_ANSWER%"=="n" goto INITIALIZATION
+
+:RUN_INIT_VSCODE_START
 cmake -DFUNCTION_ID="MCU_LIST" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake
 set "MCU_IDS="
-set /p MCU_IDS=Enter MCU IDs of debug configurations (separated by comma, 0 = all, empty = MCUs of connected boards):
-cmake -DFUNCTION_ID="INIT" "-DMCU_IDS=%MCU_IDS%" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake
+set /p MCU_IDS=Enter MCU IDs of debug configurations (separated by comma, 0 = all):
+cmake -DFUNCTION_ID="FIRMWARE_NAME" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake
+set "FIRMWARE_NAME="
+set /p FIRMWARE_NAME=Enter firmware name (without spaces and build type, empty = keep current):
+cmake -DFUNCTION_ID="INIT" "-DMCU_IDS=%MCU_IDS%" "-DFIRMWARE_NAME=%FIRMWARE_NAME%" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake
+rem The generated configuration needs VSCode extensions - installation of the missing ones is offered
+set "MISSING_EXTENSIONS="
+for /f "delims=" %%E in ('cmake "-DFUNCTION_ID=EXTENSIONS_CHECK" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake') do set "MISSING_EXTENSIONS=1"
+if not defined MISSING_EXTENSIONS goto RUN_INIT_VSCODE_END
+echo.
+echo Missing VSCode extensions:
+cmake -DFUNCTION_ID="EXTENSIONS_CHECK" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake
+set "INSTALL_ANSWER=Y"
+set /p INSTALL_ANSWER=Install the missing extensions now (Y/n):
+if /i "%INSTALL_ANSWER%"=="n" goto RUN_INIT_VSCODE_END
+cmake -DFUNCTION_ID="EXTENSIONS_INSTALL" -P CMake/HelperTools/Prj_Handler/Prj_VSCode_Handler.cmake
+
+:RUN_INIT_VSCODE_END
 pause
 goto INITIALIZATION
 
@@ -229,9 +243,11 @@ echo =====================================
 echo 0: Back to main menu
 echo 1: Unit tests
 echo 2: Integration tests
+echo 3: Coverage of the last unit tests
+echo 4: Coverage of the last integration tests
 echo =====================================
 set "choice="
-set /p choice=Enter your selection (0-2):
+set /p choice=Enter your selection (0-4):
 
 if "%choice%"=="0" goto MENU
 if "%choice%"=="1" (
@@ -243,6 +259,16 @@ if "%choice%"=="2" (
     set "TEST_TYPE=IT"
     set "TARGET_TEXT=board"
     goto RUN_TESTS_TARGET
+)
+if "%choice%"=="3" (
+    set "TEST_TYPE=UT"
+    set "TARGET_TEXT=MCU"
+    goto RUN_TESTS_COVERAGE
+)
+if "%choice%"=="4" (
+    set "TEST_TYPE=IT"
+    set "TARGET_TEXT=board"
+    goto RUN_TESTS_COVERAGE
 )
 
 echo Incorrect selection. Try again.
@@ -256,14 +282,34 @@ set "TARGET_ID="
 set /p TARGET_ID=Enter %TARGET_TEXT% ID (numerical):
 if "%TARGET_ID%"=="" goto RUN_TESTS
 if "%TARGET_ID%"=="0" goto RUN_TESTS
-cmake -DFUNCTION_ID="TEST_BUILD" -DTEST_TYPE=%TEST_TYPE% -DTARGET_ID=%TARGET_ID% -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
+rem Unit tests: the code coverage is always created and printed at the end. Integration tests: the firmware with the
+rem coverage is bigger (it does not fit into the flash of small devices) and slower, so it is asked for.
+set "TEST_COVERAGE=ON"
+if /i "%TEST_TYPE%"=="UT" goto COVERAGE_ASKED
+set "TEST_COVERAGE=OFF"
+set "COVERAGE_ANSWER="
+set /p COVERAGE_ANSWER=Code coverage of the tests (y/N):
+if /i "%COVERAGE_ANSWER%"=="y" set "TEST_COVERAGE=ON"
+:COVERAGE_ASKED
+cmake -DFUNCTION_ID="TEST_BUILD" -DTEST_TYPE=%TEST_TYPE% -DTARGET_ID=%TARGET_ID% -DTEST_COVERAGE=%TEST_COVERAGE% -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
 if errorlevel 1 (
     pause
     goto MENU
 )
 set "TEST_ID=0"
 set /p TEST_ID=Enter test set ID (numerical, 0 = All test sets):
-cmake -DFUNCTION_ID="TEST_RUN" -DTEST_TYPE=%TEST_TYPE% -DTARGET_ID=%TARGET_ID% -DTEST_ID=%TEST_ID% -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
+cmake -DFUNCTION_ID="TEST_RUN" -DTEST_TYPE=%TEST_TYPE% -DTARGET_ID=%TARGET_ID% -DTEST_ID=%TEST_ID% -DTEST_COVERAGE=%TEST_COVERAGE% -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
+pause
+goto MENU
+
+:RUN_TESTS_COVERAGE
+cls
+cmake -DFUNCTION_ID="TEST_TARGET_LIST" -DTEST_TYPE=%TEST_TYPE% -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
+set "TARGET_ID="
+set /p TARGET_ID=Enter %TARGET_TEXT% ID (numerical):
+if "%TARGET_ID%"=="" goto RUN_TESTS
+if "%TARGET_ID%"=="0" goto RUN_TESTS
+cmake -DFUNCTION_ID="TEST_COVERAGE" -DTEST_TYPE=%TEST_TYPE% -DTARGET_ID=%TARGET_ID% -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
 pause
 goto MENU
 

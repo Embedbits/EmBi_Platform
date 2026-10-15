@@ -57,6 +57,18 @@ get_filename_component(PRJ_PRESETS_HANDLER_FILE_PATH "${CMAKE_CURRENT_LIST_DIR}/
 # Include project CMake presets handler module
 include("${PRJ_PRESETS_HANDLER_FILE_PATH}")
 
+# Set path to project structure handler module
+get_filename_component(PRJ_HANDLER_FILE_PATH "${CMAKE_CURRENT_LIST_DIR}/../Prj_Handler/Prj_Handler.cmake" REALPATH)
+
+# Include project structure handler module
+include("${PRJ_HANDLER_FILE_PATH}")
+
+# Set path to application module handler module
+get_filename_component(APP_HANDLER_FILE_PATH "${CMAKE_CURRENT_LIST_DIR}/../App_Handler/App_ModuleHandler.cmake" REALPATH)
+
+# Include application module handler module
+include("${APP_HANDLER_FILE_PATH}")
+
 # Read BSP repository URL
 SysConfig_Get_BspRepoURL(BSP_REPO_URL)
 
@@ -502,9 +514,22 @@ endfunction()
 # (see Bsp_ModuleHandler_McalBranchResolve), so e.g. BSP Releases/STM32H7RS
 # composes the peripherals of Mcal Releases/STM32H7.
 #
+# Before the BSP itself is composed, the project structure is initialized
+# (ProjectStructureInit_ProjectRootInit - ArtifactsConfig.txt, CMakeLists.txt,
+# CMakePresets.json and App_ModuleHandler_Init - Application layer); files
+# which already exist are kept.
+#
 # IN_BRANCH_ID [in]: Branch numerical identification (e.g. 1 for STM32G4_Dev)
 #-------------------------------------------------------------------------------
 function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
+
+    # Project structure files (ArtifactsConfig.txt, CMakePresets.json, root
+    # CMakeLists.txt, Application layer) have to exist before anything else is
+    # done - the project can be configured as soon as its presets appear.
+    # Already existing files are kept.
+    ProjectStructureInit_ProjectRootInit()
+
+    App_ModuleHandler_Init()
 
     Bsp_ModuleHandler_CacheInit()
 

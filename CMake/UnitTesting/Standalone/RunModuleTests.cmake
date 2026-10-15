@@ -10,11 +10,15 @@
 #   BUILD_DIR   - Build folder (default: Build_UnitTest in current folder)
 #   TOOLS       - ARTIFACTS (default) / SYSTEM, see CMakeLists.txt
 #   GENERATOR   - CMake generator (default: Ninja if available, else CMake default)
+#   COVERAGE    - ON: coverage of the module (code under test is instrumented, the
+#                 report is created after the tests, default OFF)
 #   CMAKE_ARGS  - Additional configuration arguments (list), eg.
 #                 "-DUNITY_ROOT=/opt/Unity;-DCMOCK_ROOT=/opt/CMock"
 #
 # Results: <BUILD_DIR>/UnitTestResults.xml (JUnit), script fails if any test
-# fails or no test exists.
+# fails or no test exists. With COVERAGE=ON also <BUILD_DIR>/Coverage (HTML report
+# index.html, Cobertura.xml for Azure Pipelines, coverage.json, coverage-summary.json)
+# and the table of the coverage in the output.
 ################################################################################
 
 cmake_minimum_required(VERSION 3.25)
@@ -34,6 +38,13 @@ get_filename_component(BUILD_DIR "${BUILD_DIR}" ABSOLUTE)
 
 if(NOT TOOLS)
     set(TOOLS "ARTIFACTS")
+endif()
+
+set(COVERAGE_ARGS "")
+
+if(COVERAGE)
+    # The script creates the report itself after the tests
+    set(COVERAGE_ARGS "-DUNIT_TEST_COVERAGE=ON" "-DUNIT_TEST_COVERAGE_CTEST_REPORT=OFF")
 endif()
 
 set(GENERATOR_ARGS "")
@@ -71,6 +82,7 @@ runModuleTests_Step("Configuration"
     "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_LIST_DIR}" -B "${BUILD_DIR}" ${GENERATOR_ARGS}
     "-DUNIT_TEST_MODULE_PATH=${MODULE_PATH}"
     "-DUNIT_TEST_TOOLS=${TOOLS}"
+    ${COVERAGE_ARGS}
     ${CMAKE_ARGS}
 )
 
@@ -82,5 +94,11 @@ runModuleTests_Step("Unit tests"
     "${CMAKE_CTEST_COMMAND}" --test-dir "${BUILD_DIR}" --output-on-failure --no-tests=error
     --output-junit "${BUILD_DIR}/UnitTestResults.xml"
 )
+
+if(COVERAGE)
+    runModuleTests_Step("Coverage report"
+        "${CMAKE_COMMAND}" --build "${BUILD_DIR}" --target UnitTest_Coverage
+    )
+endif()
 
 message(STATUS "Unit tests passed, results: ${BUILD_DIR}/UnitTestResults.xml")
