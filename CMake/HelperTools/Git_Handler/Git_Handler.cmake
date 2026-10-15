@@ -224,6 +224,55 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
+# Function: GitHandler_GetGitlinkCommit
+# Description: Returns the commit that a repository records (as a gitlink) for
+#              a submodule path in a given revision (`git ls-tree`). Unlike
+#              GitHandler_GetCommitId, which reads a REMOTE BRANCH ("origin/"
+#              is prepended and the repository is fetched first), the revision
+#              is used as given - a commit, a tag or HEAD of the local
+#              repository - and nothing is fetched, so it reads exactly the
+#              tree that is checked out (e.g. a catalog checked out at the
+#              commit that its parent pins).
+#
+# IN_SOURCE_PATH    [in]: Path to the submodule's parent repository.
+# IN_REVISION       [in]: Revision to read the gitlink in (e.g. HEAD).
+# IN_SUBMODULE_PATH [in]: Path of the submodule in the parent repository.
+# OUT_COMMIT_ID    [out]: Pinned commit, or an empty string when the path is
+#                         not a gitlink in the revision.
+# ------------------------------------------------------------------------------
+function(GitHandler_GetGitlinkCommit IN_SOURCE_PATH IN_REVISION IN_SUBMODULE_PATH OUT_COMMIT_ID)
+
+    execute_process(COMMAND git -C "${IN_SOURCE_PATH}" ls-tree "${IN_REVISION}" -- "${IN_SUBMODULE_PATH}"
+                    OUTPUT_VARIABLE SUBTREE_INFO
+                    RESULT_VARIABLE RESULT_CODE
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+
+    set(GITLINK_COMMIT "")
+
+    if(RESULT_CODE EQUAL 0)
+
+        # "160000 commit <hash><TAB><path>" - any other mode is not a gitlink
+        string(REGEX MATCH "^160000 commit ([0-9a-f]+)" GITLINK_MATCH "${SUBTREE_INFO}")
+
+        if(GITLINK_MATCH)
+            set(GITLINK_COMMIT "${CMAKE_MATCH_1}")
+        else()
+            message(DEBUG "'${IN_SUBMODULE_PATH}' is not a gitlink in '${IN_REVISION}'. Raw: '${SUBTREE_INFO}'")
+        endif()
+
+    else()
+
+        message(DEBUG "git ls-tree '${IN_REVISION}' failed in '${IN_SOURCE_PATH}'")
+
+    endif()
+
+    set(${OUT_COMMIT_ID} "${GITLINK_COMMIT}" PARENT_SCOPE)
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
 # Function: GitHandler_ResolveBranchFromCommit
 # Description:
 #   Determines which of a (already cloned) repository's OWN remote branches

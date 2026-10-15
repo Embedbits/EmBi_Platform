@@ -352,14 +352,30 @@ endfunction()
 #   abort the rest. Finally, Bsp/Mcal/CMakeLists.txt is regenerated to build
 #   every module that was added.
 #
+#   Pinned composition (IN_CATALOG_COMMIT given, BSP_PIN_SUBMODULES): Mcal is
+#   switched to that exact commit instead of the family branch, and every
+#   peripheral is checked out at the commit that this Mcal commit pins for it
+#   (its gitlink), whatever branches the peripheral repository has - the
+#   branch check is not made. This is what a pull request check needs: the
+#   content that is going to be merged (e.g. Bsp Dev/<Family>, whose peripheral
+#   repositories have only Releases/<Family> after a release) is built, not the
+#   latest commit of a branch of the same name. A peripheral that the Mcal
+#   commit lists without a pin falls back to the latest commit of
+#   Releases/<Family> of the family branch; a pinned commit that can not be
+#   checked out stops the run - testing something else silently is worse than
+#   no test.
+#
 # IN_MCAL_REPO_URL [in]: URL of Mcal's own GIT repository (as declared in the
 #                         BSP repository's .gitmodules).
 # IN_BRANCH_NAME   [in]: Mcal family branch name (e.g. "Releases/STM32G4"),
 #                         used both to select Mcal's own peripheral list and
 #                         to checkout each peripheral repository's latest
 #                         commit.
+# IN_CATALOG_COMMIT [in]: Mcal commit pinned by the selected Bsp branch, or an
+#                         empty string for the (default) composition from the
+#                         latest commits of the family branch.
 # ------------------------------------------------------------------------------
-function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
+function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME IN_CATALOG_COMMIT)
 
     # ----------------------------------------------------------
     # Clone (or reuse) a scratch copy of Mcal itself, purely to
@@ -371,7 +387,29 @@ function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
         GitHandler_CloneMin(${IN_MCAL_REPO_URL} ${MCAL_CACHE_PATH})
     endif()
 
-    GitHandler_SwitchBranch(${MCAL_CACHE_PATH} ${IN_BRANCH_NAME})
+    # Fallback branch of a peripheral that is not pinned: Releases/<Family>
+    # of the family branch (Dev/STM32H5/Name -> Releases/STM32H5).
+    set(MCAL_FALLBACK_BRANCH "${IN_BRANCH_NAME}")
+
+    if("${IN_CATALOG_COMMIT}" STREQUAL "")
+
+        GitHandler_SwitchBranch(${MCAL_CACHE_PATH} ${IN_BRANCH_NAME})
+
+    else()
+
+        string(REGEX REPLACE "^[^/]+/([^/]+).*$" "Releases/\\1" MCAL_FALLBACK_BRANCH "${IN_BRANCH_NAME}")
+
+        GitHandler_SwitchBranch(${MCAL_CACHE_PATH} ${IN_CATALOG_COMMIT})
+
+        GitHandler_GetHeadCommit(${MCAL_CACHE_PATH} MCAL_CATALOG_HEAD)
+
+        if(NOT "${MCAL_CATALOG_HEAD}" STREQUAL "${IN_CATALOG_COMMIT}")
+            message(FATAL_ERROR "BSP_PIN_SUBMODULES: Mcal could not be checked out at the commit ${IN_CATALOG_COMMIT} pinned by the Bsp branch (it is at '${MCAL_CATALOG_HEAD}').")
+        else()
+            message(STATUS "Mcal is read at the commit ${IN_CATALOG_COMMIT} pinned by the Bsp branch, its peripherals are checked out at the commits it pins.")
+        endif()
+
+    endif()
 
     GitHandler_GetSubmoduleList(${MCAL_CACHE_PATH}
                                 MCAL_SUB_PATHS
@@ -398,14 +436,48 @@ function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
             message(STATUS "*********************************************************")
 
             # --------------------------------------------------
-            # Only compose peripherals that actually have the
-            # selected family branch available.
+            # Pinned composition: the commit that the Mcal commit
+            # pins for the peripheral is checked out, no matter
+            # which branches the peripheral repository has. A
+            # peripheral without a pin is composed from the
+            # fallback branch.
             # --------------------------------------------------
-            GitHandler_RemoteBranchExists(${MCAL_SUB_URL} ${IN_BRANCH_NAME} MCAL_SUB_BRANCH_EXISTS)
+            set(MCAL_SUB_PIN    "")
+            set(MCAL_SUB_BRANCH "${IN_BRANCH_NAME}")
 
-            if(NOT MCAL_SUB_BRANCH_EXISTS)
-                message(WARNING "Mcal peripheral '${MCAL_SUB_NAME}' has no branch '${IN_BRANCH_NAME}' - skipping.")
-                continue()
+            if(NOT "${IN_CATALOG_COMMIT}" STREQUAL "")
+
+                GitHandler_GetGitlinkCommit(${MCAL_CACHE_PATH} HEAD ${MCAL_SUB_NAME} MCAL_SUB_PIN)
+
+                if("${MCAL_SUB_PIN}" STREQUAL "")
+                    message(WARNING "Mcal commit ${IN_CATALOG_COMMIT} pins no commit of the peripheral '${MCAL_SUB_NAME}' - the latest commit of '${MCAL_FALLBACK_BRANCH}' is used.")
+                    set(MCAL_SUB_BRANCH "${MCAL_FALLBACK_BRANCH}")
+                else()
+                    message(STATUS "Mcal peripheral '${MCAL_SUB_NAME}' is pinned at ${MCAL_SUB_PIN}.")
+                endif()
+
+            else()
+                # Default composition - the latest commit of the family branch
+            endif()
+
+            # --------------------------------------------------
+            # Only compose peripherals that actually have the
+            # selected family branch available (a pinned
+            # peripheral needs no branch).
+            # --------------------------------------------------
+            if("${MCAL_SUB_PIN}" STREQUAL "")
+
+                GitHandler_RemoteBranchExists(${MCAL_SUB_URL} ${MCAL_SUB_BRANCH} MCAL_SUB_BRANCH_EXISTS)
+
+                if(NOT MCAL_SUB_BRANCH_EXISTS)
+                    message(WARNING "Mcal peripheral '${MCAL_SUB_NAME}' has no branch '${MCAL_SUB_BRANCH}' - skipping.")
+                    continue()
+                else()
+                    # The branch exists - the peripheral is composed
+                endif()
+
+            else()
+                # Pinned - checked out at the pinned commit below
             endif()
 
             set(LOCAL_MCAL_SUB_PATH "${PROJECT_ROOT_PATH}/${MCAL_REL_PATH}/${MCAL_SUB_NAME}")
@@ -425,8 +497,14 @@ function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
                     # would just produce a second, misleading "failed to
                     # fetch" warning), and do not count this peripheral as
                     # successfully added below.
-                    message(WARNING "Mcal peripheral '${MCAL_SUB_NAME}' could not be checked out - skipping (it will NOT be added to Bsp/Mcal/CMakeLists.txt).")
-                    continue()
+                    if("${MCAL_SUB_PIN}" STREQUAL "")
+                        message(WARNING "Mcal peripheral '${MCAL_SUB_NAME}' could not be checked out - skipping (it will NOT be added to Bsp/Mcal/CMakeLists.txt).")
+                        continue()
+                    else()
+                        message(FATAL_ERROR "BSP_PIN_SUBMODULES: the Mcal peripheral '${MCAL_SUB_NAME}' could not be checked out, the pinned commit ${MCAL_SUB_PIN} can not be tested.")
+                    endif()
+                else()
+                    # The peripheral is checked out
                 endif()
 
                 # Ignore submodule changes in parent directory (meaningless for a
@@ -437,24 +515,47 @@ function(Bsp_ModuleHandler_McalPeripheralsInit IN_MCAL_REPO_URL IN_BRANCH_NAME)
 
             endif()
 
-            # --------------------------------------------------
-            # Always checkout the LATEST commit of the family
-            # branch (never a pinned commit) for each peripheral.
-            # --------------------------------------------------
-            GitHandler_SwitchBranch(${LOCAL_MCAL_SUB_PATH} ${IN_BRANCH_NAME})
+            if("${MCAL_SUB_PIN}" STREQUAL "")
 
-            if(NOT EXISTS "${LOCAL_MCAL_SUB_PATH}/.git")
-                # SwitchBranch already warned with the exact git error. Do not
-                # add a peripheral that isn't actually checked out to
-                # Bsp/Mcal/CMakeLists.txt - a missing add_subdirectory() target
-                # there would otherwise turn this soft warning into a hard
-                # CMake configure error the next time the actual project
-                # (rather than Setup.sh) is configured.
-                continue()
+                # --------------------------------------------------
+                # Always checkout the LATEST commit of the family
+                # branch (never a pinned commit) for each peripheral.
+                # --------------------------------------------------
+                GitHandler_SwitchBranch(${LOCAL_MCAL_SUB_PATH} ${MCAL_SUB_BRANCH})
+
+                if(NOT EXISTS "${LOCAL_MCAL_SUB_PATH}/.git")
+                    # SwitchBranch already warned with the exact git error. Do not
+                    # add a peripheral that isn't actually checked out to
+                    # Bsp/Mcal/CMakeLists.txt - a missing add_subdirectory() target
+                    # there would otherwise turn this soft warning into a hard
+                    # CMake configure error the next time the actual project
+                    # (rather than Setup.sh) is configured.
+                    continue()
+                else()
+                    # Checked out - recorded below
+                endif()
+
+                # Branch followed by the BSP update path
+                GitHandler_SetTrackedBranch(${LOCAL_MCAL_SUB_PATH} ${MCAL_SUB_BRANCH})
+
+            else()
+
+                # --------------------------------------------------
+                # Pinned: exactly the commit of the Mcal commit. A
+                # different commit would test something else than
+                # what is going to be released.
+                # --------------------------------------------------
+                GitHandler_SwitchBranch(${LOCAL_MCAL_SUB_PATH} ${MCAL_SUB_PIN})
+
+                GitHandler_GetHeadCommit(${LOCAL_MCAL_SUB_PATH} MCAL_SUB_HEAD)
+
+                if(NOT "${MCAL_SUB_HEAD}" STREQUAL "${MCAL_SUB_PIN}")
+                    message(FATAL_ERROR "BSP_PIN_SUBMODULES: the Mcal peripheral '${MCAL_SUB_NAME}' could not be checked out at the pinned commit ${MCAL_SUB_PIN} (it is at '${MCAL_SUB_HEAD}').")
+                else()
+                    # At the pinned commit
+                endif()
+
             endif()
-
-            # Branch followed by the BSP update path
-            GitHandler_SetTrackedBranch(${LOCAL_MCAL_SUB_PATH} ${IN_BRANCH_NAME})
 
             list(APPEND MCAL_ADDED_MODULES "${MCAL_SUB_NAME}")
 
@@ -518,6 +619,17 @@ endfunction()
 # (ProjectStructureInit_ProjectRootInit - ArtifactsConfig.txt, CMakeLists.txt,
 # CMakePresets.json and App_ModuleHandler_Init - Application layer); files
 # which already exist are kept.
+#
+# Pinned composition (option BSP_PIN_SUBMODULES, cmake -DBSP_PIN_SUBMODULES=ON,
+# default OFF): for the checks of a pull request, where the content that is
+# going to be merged has to be tested and not the latest commits of branches
+# (the Dev/<Family> branches of the peripheral repositories do not exist after
+# a release). Every submodule is then checked out at EXACTLY the commit the
+# selected Bsp branch pins, the Mcal catalog is read at the commit pinned by
+# Bsp and every Mcal peripheral is checked out at the commit the catalog pins
+# (see Bsp_ModuleHandler_McalPeripheralsInit). A submodule that can not be
+# checked out at its pin stops the run. The composition of a project (Setup)
+# does not use the option and is unchanged.
 #
 # IN_BRANCH_ID [in]: Branch numerical identification (e.g. 1 for STM32G4_Dev)
 #-------------------------------------------------------------------------------
@@ -597,9 +709,27 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
 
                 list(APPEND PROCESSED_SUB_NAMES "${SUB_NAME}")
 
+                # Pinned composition (BSP_PIN_SUBMODULES): the Mcal commit
+                # that the selected Bsp branch pins is the one read.
+                set(MCAL_CATALOG_PIN "")
+
+                if(BSP_PIN_SUBMODULES)
+
+                    GitHandler_GetCommitId(${CACHE_PATH} ${BRANCH_NAME} ${SUB_NAME} MCAL_CATALOG_PIN)
+
+                    if("${MCAL_CATALOG_PIN}" STREQUAL "")
+                        message(WARNING "BSP_PIN_SUBMODULES: branch '${BRANCH_NAME}' pins no Mcal commit - the peripherals are composed from the latest commits of the Mcal branch.")
+                    else()
+                        message(STATUS "BSP_PIN_SUBMODULES: branch '${BRANCH_NAME}' pins Mcal at ${MCAL_CATALOG_PIN}.")
+                    endif()
+
+                else()
+                    # Default composition - the latest commits of the Mcal branch
+                endif()
+
                 Bsp_ModuleHandler_McalBranchResolve(${SUB_URL} ${BRANCH_NAME} MCAL_BRANCH_NAME)
 
-                Bsp_ModuleHandler_McalPeripheralsInit(${SUB_URL} ${MCAL_BRANCH_NAME})
+                Bsp_ModuleHandler_McalPeripheralsInit(${SUB_URL} ${MCAL_BRANCH_NAME} "${MCAL_CATALOG_PIN}")
 
                 continue()
 
@@ -654,15 +784,35 @@ function(Bsp_ModuleHandler_Config IN_BRANCH_ID)
             # branches alphabetically, "Dev/..." before "Releases/...".
             # The branch is recorded for the BSP update path.
             # ------------------------------------------------------
-            GitHandler_ResolvePreferredBranchFromCommit(${LOCAL_SUB_PATH} ${SUB_PINNED_COMMIT} ${BRANCH_NAME} SUB_BRANCH)
+            if(BSP_PIN_SUBMODULES)
 
-            if("${SUB_BRANCH}" STREQUAL "")
-                message(WARNING "Could not resolve which branch of '${SUB_NAME}' contains its pinned commit - staying at commit ${SUB_PINNED_COMMIT}.")
+                # Pinned composition: exactly the pinned commit, not the
+                # latest commit of its branch - the content of the selected
+                # Bsp branch is what is going to be released.
+                message(STATUS "'${SUB_NAME}' is pinned at ${SUB_PINNED_COMMIT} (BSP_PIN_SUBMODULES).")
                 GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${SUB_PINNED_COMMIT})
+
+                GitHandler_GetHeadCommit(${LOCAL_SUB_PATH} SUB_HEAD_COMMIT)
+
+                if(NOT "${SUB_HEAD_COMMIT}" STREQUAL "${SUB_PINNED_COMMIT}")
+                    message(FATAL_ERROR "BSP_PIN_SUBMODULES: '${SUB_NAME}' could not be checked out at the pinned commit ${SUB_PINNED_COMMIT} (it is at '${SUB_HEAD_COMMIT}').")
+                else()
+                    # At the pinned commit
+                endif()
+
             else()
-                message(STATUS "'${SUB_NAME}' follows branch '${SUB_BRANCH}' (BSP pins ${SUB_PINNED_COMMIT}).")
-                GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${SUB_BRANCH})
-                GitHandler_SetTrackedBranch(${LOCAL_SUB_PATH} ${SUB_BRANCH})
+
+                GitHandler_ResolvePreferredBranchFromCommit(${LOCAL_SUB_PATH} ${SUB_PINNED_COMMIT} ${BRANCH_NAME} SUB_BRANCH)
+
+                if("${SUB_BRANCH}" STREQUAL "")
+                    message(WARNING "Could not resolve which branch of '${SUB_NAME}' contains its pinned commit - staying at commit ${SUB_PINNED_COMMIT}.")
+                    GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${SUB_PINNED_COMMIT})
+                else()
+                    message(STATUS "'${SUB_NAME}' follows branch '${SUB_BRANCH}' (BSP pins ${SUB_PINNED_COMMIT}).")
+                    GitHandler_SwitchBranch(${LOCAL_SUB_PATH} ${SUB_BRANCH})
+                    GitHandler_SetTrackedBranch(${LOCAL_SUB_PATH} ${SUB_BRANCH})
+                endif()
+
             endif()
 
         endforeach()
@@ -921,6 +1071,9 @@ endfunction()
 # Usage: 
 # cmake -P Bsp_ModuleHandler.cmake               : The branch list will be print
 # cmake -P -DBRANCH_ID=2 Bsp_ModuleHandler.cmake : The branch with ID 2 will be used
+# cmake -DFUNCTION_ID=BSP_CONFIG -DBRANCH_ID=2 -DBSP_PIN_SUBMODULES=ON -P Bsp_ModuleHandler.cmake :
+#     The submodules (and the Mcal peripherals) are checked out at the commits
+#     the branch pins, see Bsp_ModuleHandler_Config
 #==============================================================================#
 if(CMAKE_SCRIPT_MODE_FILE AND 
    CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
