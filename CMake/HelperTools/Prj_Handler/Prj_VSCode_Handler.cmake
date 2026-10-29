@@ -52,6 +52,9 @@ include("${CMAKE_CURRENT_LIST_DIR}/../Build_Handler/Build_Handler.cmake")
 # probe-rs artifact lookup, MCU identification of the Ral presets
 include("${CMAKE_CURRENT_LIST_DIR}/../../IntegrationTesting/IntegrationTesting_Probe.cmake")
 
+# Connected boards of this machine and of the IT agents (targets of the debug configurations of a picked board)
+include("${CMAKE_CURRENT_LIST_DIR}/../../IntegrationTesting/IntegrationTesting_Detect.cmake")
+
 #==============================================================================#
 # Global variables
 #==============================================================================#
@@ -72,6 +75,25 @@ file(RELATIVE_PATH VSCODE_PROBE_RS_SCRIPT "${PROJECT_ROOT_PATH}" "${CMAKE_CURREN
 
 # Task of the debug configurations (preLaunchTask) providing the probe-rs artifact
 set(VSCODE_PROVIDE_PROBE_RS_TASK "EmBi: Provide probe-rs")  # <task> <MCU>
+
+# Tasks of the debug configurations of a picked board (preLaunchTask, background): the Debug firmware is built
+# (or not, integration test firmware) and the debug server of the board is started (Prj_VSCode_ProbeRs.cmake)
+set(VSCODE_DEBUG_SERVE_TASK      "EmBi: Prepare debugging on board")
+set(VSCODE_DEBUG_SERVE_TEST_TASK "EmBi: Prepare debugging of an integration test on board")
+
+# Lines of the debug server - start of the task and the server listening (the debug configuration connects then)
+set(VSCODE_DEBUG_BEGIN_PATTERN   "EmBi: preparing debugging")
+set(VSCODE_DEBUG_READY_PATTERN   "EmBi: debug server listening on port")
+
+# Board picked by the inputs of the debug configurations of a picked board (written by DEBUG_BOARD_SERVER,
+# read by the preLaunchTask)
+set(VSCODE_DEBUG_TARGET_FILE    "${PROJECT_ROOT_PATH}/Build/DebugTarget.cmake")
+
+# Ports of the debug server of a picked board: 127.0.0.1 of this machine (the tunnel of an IT agent) and of the
+# agent - <base> + hash of the board % <range> (the ports of the excluded port ranges of Windows are skipped)
+set(VSCODE_DEBUG_LOCAL_PORT_BASE  30000)
+set(VSCODE_DEBUG_REMOTE_PORT_BASE 40000)
+set(VSCODE_DEBUG_PORT_RANGE       10000)
 file(RELATIVE_PATH VSCODE_SETUP_DIR "${PROJECT_ROOT_PATH}" "${CMAKE_CURRENT_LIST_DIR}/../../..")
 
 # Ral presets with MCU identification
@@ -81,8 +103,8 @@ set(VSCODE_RAL_PRESETS_FILE     "${PROJECT_ROOT_PATH}/Bsp/Ral/RalPresets.json")
 # Devices.csv (Device;Core;File;Pack), which assigns the SVD file to a device
 set(VSCODE_SVD_DIR              "${PROJECT_ROOT_PATH}/Bsp/Ral/Svd")
 
-# Boards of the project (override of detected boards)
-set(VSCODE_PROJECT_BOARDS_FILE  "${PROJECT_ROOT_PATH}/IntegrationTestBoards.json")
+# Board configuration of the project (ItBoards.json)
+set(VSCODE_PROJECT_BOARDS_FILE  "${PROJECT_ROOT_PATH}/${IT_PROJECT_BOARDS_NAME}")
 
 # Folders not searched for tests
 set(VSCODE_EXCLUDED_DIRS        "Build;EmBi_Platform;STM32CubeIDE;.git;.vscode;.settings")
@@ -387,35 +409,6 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
-# Function: Prj_VSCode_GetProjectBoards
-# Description: Boards of the project boards file (IntegrationTestBoards.json).
-#
-# OUT_BOARD_LIST [out]: List of boards.
-# ------------------------------------------------------------------------------
-function(Prj_VSCode_GetProjectBoards OUT_BOARD_LIST)
-
-    set(BOARD_LIST "")
-
-    if(EXISTS "${VSCODE_PROJECT_BOARDS_FILE}")
-
-        file(READ "${VSCODE_PROJECT_BOARDS_FILE}" BOARDS_CONTENT)
-        string(JSON BOARDS_CNT ERROR_VARIABLE BOARDS_ERROR LENGTH "${BOARDS_CONTENT}" boards)
-
-        if(NOT BOARDS_ERROR AND BOARDS_CNT GREATER 0)
-            math(EXPR BOARDS_LAST "${BOARDS_CNT} - 1")
-            foreach(BOARD_IDX RANGE ${BOARDS_LAST})
-                string(JSON BOARD MEMBER "${BOARDS_CONTENT}" boards ${BOARD_IDX})
-                list(APPEND BOARD_LIST "${BOARD}")
-            endforeach()
-        endif()
-
-    endif()
-
-    set(${OUT_BOARD_LIST} "${BOARD_LIST}" PARENT_SCOPE)
-endfunction()
-
-
-# ------------------------------------------------------------------------------
 # Function: Prj_VSCode_GetBoardValue
 # Description: Value of the first board of the boards file with the integration
 #              test preset of the MCU.
@@ -501,7 +494,7 @@ function(Prj_VSCode_GetChip IN_MCU OUT_CHIP)
         if(NOT CHIP_FOUND)
             list(JOIN CANDIDATES ", " CANDIDATES_TEXT)
             message(WARNING "probe-rs knows no chip of ${IN_MCU} (${CANDIDATES_TEXT}) - set INTEGRATION_TEST_PROBE_RS_CHIP "
-                        "of the board in IntegrationTestBoards.json.")
+                        "of the board in ItBoards.json.")
         endif()
 
     endif()
@@ -676,6 +669,16 @@ function(Prj_VSCode_GenerateTasks IN_MCU_LIST IN_DEBUG_MCU_LIST)
                          "\"build\"" FALSE "${VSCODE_BUILD_HANDLER}"
                          -DFUNCTION_ID=BUILD ${MCU_ARG} ${TYPE_ARG} -DBUILD_CLEAN=ON)
 
+    Prj_VSCode_CmakeTask(BOARD_BUILD_TASK
+                         "EmBi: Build for board"
+                         "Build for a picked board in its build folder (its fixture and own defines)"
+                         "\"build\""
+                         FALSE
+                         "${VSCODE_BUILD_HANDLER}"
+                         -DFUNCTION_ID=BUILD
+                         "-DBOARD=\${input:buildBoard}"
+                         ${TYPE_ARG})
+
     Prj_VSCode_CmakeTask(FLASH_TASK "EmBi: Flash"
                          "Build the project for the selected MCU and build type, flash it by probe-rs and reset the MCU"
                          "" FALSE "${VSCODE_HANDLER}"
@@ -694,7 +697,7 @@ function(Prj_VSCode_GenerateTasks IN_MCU_LIST IN_DEBUG_MCU_LIST)
     Prj_VSCode_CmakeTask(DETECT_TASK "EmBi: Detect connected boards"
                          "List boards connected to debug probes (Build/IntegrationTestBoards.json)"
                          "" FALSE "${VSCODE_BUILD_HANDLER}"
-                         -DFUNCTION_ID=TEST_TARGET_LIST -DTEST_TYPE=IT)
+                         -DFUNCTION_ID=DETECT_BOARDS)
 
     # Setup menu in the terminal
     Prj_VSCode_JsonString(SETUP_SH "bash ${VSCODE_SETUP_DIR}/Setup.sh")
@@ -707,7 +710,8 @@ function(Prj_VSCode_GenerateTasks IN_MCU_LIST IN_DEBUG_MCU_LIST)
                           command "${SETUP_SH}" windows "${SETUP_WINDOWS}"
                           presentation "{ \"focus\": true, \"panel\": \"dedicated\" }" problemMatcher "[]")
 
-    set(TASKS "${BUILD_TASK}" "${REBUILD_TASK}" "${FLASH_TASK}" "${UT_TASK}" "${IT_TASK}" "${DETECT_TASK}" "${SETUP_TASK}")
+    set(TASKS "${BUILD_TASK}" "${REBUILD_TASK}" "${BOARD_BUILD_TASK}" "${FLASH_TASK}" "${UT_TASK}" "${IT_TASK}"
+              "${DETECT_TASK}" "${SETUP_TASK}")
 
     # Build of the debug firmware and probe-rs before debugging (preLaunchTask) - probe-rs of the
     # version configured for the integration test preset of the MCU, downloaded by the artifacts
@@ -728,20 +732,32 @@ function(Prj_VSCode_GenerateTasks IN_MCU_LIST IN_DEBUG_MCU_LIST)
         list(APPEND TASKS "${PREPARE_TASK}")
     endforeach()
 
+    # Debug server of a picked board (this machine or IT agent) - preLaunchTask of the debug configurations
+    # of a picked board, with the build of the Debug firmware and without it (integration test firmware)
+    Prj_VSCode_DebugServeTask(SERVE_TASK "${VSCODE_DEBUG_SERVE_TASK}" ON)
+    Prj_VSCode_DebugServeTask(SERVE_TEST_TASK "${VSCODE_DEBUG_SERVE_TEST_TASK}" OFF)
+    list(APPEND TASKS "${SERVE_TASK}" "${SERVE_TEST_TASK}")
+
     Prj_VSCode_JsonArray(TASKS ${TASKS})
 
     # Inputs - the lists are resolved by CMake when the task is started (MCUs of the presets, boards of the
     # project and of the detection, test sets registered in the project)
     Prj_VSCode_ShellInput(MCU_INPUT mcu "MCU" FALSE -DFUNCTION_ID=PICK_MCU)
     Prj_VSCode_PickInput(TYPE_INPUT buildType "Build type" Debug Debug Release)
-    Prj_VSCode_ShellInput(BOARD_INPUT itBoard "Connected board (detected boards are named by MCU)" FALSE
-                          -DFUNCTION_ID=PICK_BOARD)
+    Prj_VSCode_ShellInput(BOARD_INPUT itBoard "Board of the integration tests" FALSE -DFUNCTION_ID=PICK_BOARD)
+    Prj_VSCode_ShellInput(BUILD_BOARD_INPUT buildBoard "Board of the build" FALSE -DFUNCTION_ID=PICK_DEBUG_BOARD)
     Prj_VSCode_ShellInput(UT_SET_INPUT utTestSet "Test set of the unit tests" FALSE
                           -DFUNCTION_ID=PICK_TEST_SET -DTEST_TYPE=UT)
     Prj_VSCode_ShellInput(IT_SET_INPUT itTestSet "Test set of the integration tests" FALSE
                           -DFUNCTION_ID=PICK_TEST_SET -DTEST_TYPE=IT)
 
-    Prj_VSCode_JsonArray(INPUTS "${MCU_INPUT}" "${TYPE_INPUT}" "${BOARD_INPUT}" "${UT_SET_INPUT}" "${IT_SET_INPUT}")
+    Prj_VSCode_JsonArray(INPUTS
+                         "${MCU_INPUT}"
+                         "${TYPE_INPUT}"
+                         "${BOARD_INPUT}"
+                         "${BUILD_BOARD_INPUT}"
+                         "${UT_SET_INPUT}"
+                         "${IT_SET_INPUT}")
 
     Prj_VSCode_JsonObject(CONTENT version "\"2.0.0\"" options "{ \"cwd\": \"\${workspaceFolder}\" }"
                           presentation "{ \"panel\": \"dedicated\", \"clear\": true }"
@@ -805,6 +821,96 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
+# Function: Prj_VSCode_ProbeRsBoardConfig
+# Description: probe-rs debug configuration of a picked board - a board of this machine or of an IT agent
+#              (input debugBoard, connected boards of the detection). The preLaunchTask starts the debug
+#              server of the board (Prj_VSCode_ProbeRs.cmake DEBUG_SERVE: here or on the agent over ssh -tt -L)
+#              and the configuration connects to it (server 127.0.0.1:<port>); the extension sends the
+#              firmware and the SVD file to the server (remoteServerMode), the server needs no file of
+#              this machine. The probe of the board is given, so two boards of one MCU are told apart.
+#              The input debugBoard is the first member: the other inputs use its value
+#              (${input:debugBoard} in their commands) and VS Code resolves the inputs in the order of the
+#              members.
+#
+# OUT_JSON     [out]: JSON debug configuration.
+# IN_NAME      [in]:  Name of the configuration.
+# IN_PROGRAM   [in]:  Firmware (ELF).
+# IN_PRELAUNCH [in]:  preLaunchTask (VSCODE_DEBUG_SERVE_TASK or VSCODE_DEBUG_SERVE_TEST_TASK).
+# ------------------------------------------------------------------------------
+function(Prj_VSCode_ProbeRsBoardConfig OUT_JSON IN_NAME IN_PROGRAM IN_PRELAUNCH)
+
+    Prj_VSCode_JsonString(NAME "${IN_NAME}")
+    Prj_VSCode_JsonString(PROGRAM "${IN_PROGRAM}")
+    Prj_VSCode_JsonString(PRELAUNCH "${IN_PRELAUNCH}")
+
+    set(MEMBERS type "\"probe-rs-debug\"")
+    list(APPEND MEMBERS request "\"launch\"")
+    list(APPEND MEMBERS name "${NAME}")
+    list(APPEND MEMBERS embiBoard "\"\${input:debugBoard}\"")
+    list(APPEND MEMBERS cwd "\"\${workspaceFolder}\"")
+    list(APPEND MEMBERS server "\"\${input:debugServer}\"")
+    list(APPEND MEMBERS remoteServerMode "true")
+    list(APPEND MEMBERS probe "\"\${input:debugProbe}\"")
+    list(APPEND MEMBERS chip "\"\${input:debugChip}\"")
+    list(APPEND MEMBERS connectUnderReset "false")
+    list(APPEND MEMBERS flashingConfig "{ \"flashingEnabled\": true, \"haltAfterReset\": false }")
+
+    set(CORE_MEMBERS coreIndex "0")
+    list(APPEND CORE_MEMBERS programBinary "${PROGRAM}")
+    list(APPEND CORE_MEMBERS svdFile "\"\${input:debugSvd}\"")
+    list(APPEND CORE_MEMBERS rttEnabled "true")
+
+    Prj_VSCode_JsonObject(CORE ${CORE_MEMBERS})
+    Prj_VSCode_JsonArray(CORES "${CORE}")
+
+    list(APPEND MEMBERS coreConfigs "${CORES}")
+    list(APPEND MEMBERS consoleLogLevel "\"Console\"")
+    list(APPEND MEMBERS preLaunchTask "${PRELAUNCH}")
+
+    Prj_VSCode_JsonObject(CONFIG ${MEMBERS})
+
+    set(${OUT_JSON} "${CONFIG}" PARENT_SCOPE)
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Prj_VSCode_DebugServeTask
+# Description: preLaunchTask of the debug configurations of a picked board (background task): builds the
+#              Debug firmware (IN_BUILD) and starts the debug server of the board (Prj_VSCode_ProbeRs.cmake
+#              DEBUG_SERVE). VS Code starts the debug session when the server prints
+#              VSCODE_DEBUG_READY_PATTERN, the task ends with the session.
+#
+# OUT_JSON [out]: JSON task.
+# IN_LABEL [in]:  Label of the task.
+# IN_BUILD [in]:  ON - the Debug firmware of the MCU of the board is built first.
+# ------------------------------------------------------------------------------
+function(Prj_VSCode_DebugServeTask OUT_JSON IN_LABEL IN_BUILD)
+
+    Prj_VSCode_JsonString(LABEL "${IN_LABEL}")
+    Prj_VSCode_JsonStringArray(ARGS -DFUNCTION_ID=DEBUG_SERVE -DBUILD=${IN_BUILD} -P "${VSCODE_PROBE_RS_SCRIPT}")
+    Prj_VSCode_JsonString(BEGIN_PATTERN "${VSCODE_DEBUG_BEGIN_PATTERN}")
+    Prj_VSCode_JsonString(READY_PATTERN "${VSCODE_DEBUG_READY_PATTERN}")
+
+    set(BACKGROUND "{ \"activeBegin\": true, \"beginsPattern\": ${BEGIN_PATTERN}, \"endsPattern\": ${READY_PATTERN} }")
+    set(LOCATION "[ \"autoDetect\", \"\${workspaceFolder}\" ]")
+    set(MATCHER "{ \"base\": \"$gcc\", \"fileLocation\": ${LOCATION}, \"background\": ${BACKGROUND} }")
+
+    set(MEMBERS label "${LABEL}")
+    list(APPEND MEMBERS detail "\"Start the debug server of the picked board (this machine or IT agent)\"")
+    list(APPEND MEMBERS type "\"process\"")
+    list(APPEND MEMBERS command "\"cmake\"")
+    list(APPEND MEMBERS args "${ARGS}")
+    list(APPEND MEMBERS isBackground "true")
+    list(APPEND MEMBERS hide "true")
+    list(APPEND MEMBERS problemMatcher "${MATCHER}")
+
+    Prj_VSCode_JsonObject(TASK ${MEMBERS})
+
+    set(${OUT_JSON} "${TASK}" PARENT_SCOPE)
+endfunction()
+
+
+# ------------------------------------------------------------------------------
 # Function: Prj_VSCode_ShellInput
 # Description: Input of debug configurations resolved by CMake (extension Tasks
 #              Shell Input): the script of this handler is executed when the
@@ -823,8 +929,10 @@ function(Prj_VSCode_ShellInput OUT_JSON IN_ID IN_DESCRIPTION IN_FIRST)
     Prj_VSCode_JsonString(DESCRIPTION "${IN_DESCRIPTION}")
     Prj_VSCode_JsonStringArray(COMMAND_ARGS ${ARGN} -P "${VSCODE_HANDLER}")
 
+    # taskId: the extension finds the input by it - by the command alone the last input with the same
+    # command wins (buildBoard of tasks.json took the pick of debugBoard of launch.json)
     set(ARG_MEMBERS command "\"cmake\"" commandArgs "${COMMAND_ARGS}" cwd "\"\${workspaceFolder}\""
-                    fieldSeparator "\"|\"" description "${DESCRIPTION}")
+                    fieldSeparator "\"|\"" description "${DESCRIPTION}" taskId "${ID}")
 
     if(IN_FIRST)
         list(APPEND ARG_MEMBERS useFirstResult "true")
@@ -903,6 +1011,32 @@ function(Prj_VSCode_GenerateLaunch IN_MCU_LIST IN_DEBUG_MCU_LIST)
         list(APPEND INPUTS "${UT_INPUT}" "${GDB_INPUT}")
 
     endforeach()
+
+    # Debugging of a picked board - boards of this machine and of the IT agents of ItHosts.json (detected
+    # when the configuration is started), the chip, the SVD file, the firmware and the debug server resolved
+    # from the picked board
+    set(TARGET_ARG "-DTARGET=\${input:debugBoard}")
+
+    Prj_VSCode_ShellInput(BOARD_IN debugBoard "Board to debug" FALSE -DFUNCTION_ID=PICK_DEBUG_BOARD)
+    Prj_VSCode_ShellInput(SERVER_IN debugServer "Debug server" TRUE -DFUNCTION_ID=DEBUG_BOARD_SERVER ${TARGET_ARG})
+    Prj_VSCode_ShellInput(PROBE_IN debugProbe "Probe" TRUE -DFUNCTION_ID=DEBUG_BOARD_PROBE ${TARGET_ARG})
+    Prj_VSCode_ShellInput(CHIP_IN debugChip "probe-rs chip" TRUE -DFUNCTION_ID=DEBUG_BOARD_CHIP ${TARGET_ARG})
+    Prj_VSCode_ShellInput(SVD_IN debugSvd "SVD file" TRUE -DFUNCTION_ID=DEBUG_BOARD_SVD ${TARGET_ARG})
+    Prj_VSCode_ShellInput(FW_IN debugFirmware "Debug firmware" TRUE -DFUNCTION_ID=DEBUG_BOARD_FIRMWARE ${TARGET_ARG})
+    Prj_VSCode_ShellInput(TEST_IN debugTest "Integration test" FALSE -DFUNCTION_ID=DEBUG_BOARD_TESTS ${TARGET_ARG})
+
+    list(APPEND INPUTS "${BOARD_IN}" "${SERVER_IN}" "${PROBE_IN}" "${CHIP_IN}" "${SVD_IN}" "${FW_IN}" "${TEST_IN}")
+
+    Prj_VSCode_ProbeRsBoardConfig(BOARD_CONFIG
+                                  "EmBi: Debug on board"
+                                  "\${input:debugFirmware}"
+                                  "${VSCODE_DEBUG_SERVE_TASK}")
+    Prj_VSCode_ProbeRsBoardConfig(BOARD_TEST_CONFIG
+                                  "EmBi: Debug integration test on board"
+                                  "\${input:debugTest}"
+                                  "${VSCODE_DEBUG_SERVE_TEST_TASK}")
+
+    list(APPEND CONFIGS "${BOARD_CONFIG}" "${BOARD_TEST_CONFIG}")
 
     Prj_VSCode_JsonArray(CONFIGS ${CONFIGS})
     Prj_VSCode_JsonArray(INPUTS ${INPUTS})
@@ -1441,20 +1575,250 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
-# Function: Prj_VSCode_PrintBoards
-# Description: Prints the boards of the integration tests - boards of the project
-#              boards file, boards named by MCU (the boards detected by the task
-#              are named so), all connected boards.
+# Function: Prj_VSCode_DetectTargets
+# Description: Detects the connected boards of this machine and of the IT agents of ItHosts.json
+#              (IntegrationTesting_Detect.cmake, its output is not printed - an input prints only its
+#              options) and reads the targets (IntegrationTesting_ReadTargets).
+#
+# OUT_COUNT [out]: Count of the targets (IT_TARGET_<idx>_* in the parent scope).
 # ------------------------------------------------------------------------------
-function(Prj_VSCode_PrintBoards)
+function(Prj_VSCode_DetectTargets OUT_COUNT)
 
-    Build_Handler_GetMcuList(MCU_LIST)
-    Prj_VSCode_GetProjectBoards(PROJECT_BOARDS)
+    set(DETECT_ARGS -DIT_BOARDS_FILE=${BUILD_HANDLER_BOARDS_FILE} -P "${BUILD_HANDLER_IT_DETECT}")
 
-    set(BOARDS ${PROJECT_BOARDS} ${MCU_LIST})
-    list(REMOVE_DUPLICATES BOARDS)
+    execute_process(COMMAND "${CMAKE_COMMAND}" ${DETECT_ARGS}
+                    WORKING_DIRECTORY "${PROJECT_ROOT_PATH}"
+                    RESULT_VARIABLE DETECT_RESULT
+                    OUTPUT_VARIABLE DETECT_OUTPUT
+                    ERROR_VARIABLE  DETECT_OUTPUT)
 
-    Prj_VSCode_PrintOptions(${BOARDS} "${BUILD_HANDLER_ALL_BOARDS_TEXT}")
+    if(NOT DETECT_RESULT EQUAL 0)
+        message("Detection of connected boards failed:\n${DETECT_OUTPUT}")
+    endif()
+
+    IntegrationTesting_ReadTargets(TARGETS_CNT "${BUILD_HANDLER_BOARDS_FILE}")
+
+    math(EXPR TARGETS_LAST "${TARGETS_CNT} - 1")
+    if(TARGETS_CNT GREATER 0)
+        foreach(TARGET_IDX RANGE ${TARGETS_LAST})
+            foreach(SUFFIX IN LISTS IT_TARGET_SUFFIXES)
+                set(IT_TARGET_${TARGET_IDX}_${SUFFIX} "${IT_TARGET_${TARGET_IDX}_${SUFFIX}}" PARENT_SCOPE)
+            endforeach()
+        endforeach()
+    endif()
+
+    set(${OUT_COUNT} ${TARGETS_CNT} PARENT_SCOPE)
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Prj_VSCode_PrintTargets
+# Description: Prints the connected boards of this machine and of the IT agents (detected now) - one
+#              option per physical board: <ID>|<board> - <name of the board>|<host>.
+#
+# IN_ALL_BOARDS [in]: TRUE - the option BUILD_HANDLER_ALL_BOARDS_TEXT is printed too.
+# ------------------------------------------------------------------------------
+function(Prj_VSCode_PrintTargets IN_ALL_BOARDS)
+
+    Prj_VSCode_DetectTargets(TARGETS_CNT)
+
+    set(LINES "")
+
+    if(TARGETS_CNT GREATER 0)
+
+        math(EXPR TARGETS_LAST "${TARGETS_CNT} - 1")
+
+        foreach(TARGET_IDX RANGE ${TARGETS_LAST})
+
+            if("${IT_TARGET_${TARGET_IDX}_HOST}" STREQUAL "${IT_LOCAL_HOST}")
+                set(DESCRIPTION "this machine")
+            else()
+                set(DESCRIPTION "${IT_TARGET_${TARGET_IDX}_HOST} (${IT_TARGET_${TARGET_IDX}_TARGET})")
+            endif()
+
+            if(NOT "${IT_TARGET_${TARGET_IDX}_FEATURES}" STREQUAL "")
+                string(APPEND DESCRIPTION " - ${IT_TARGET_${TARGET_IDX}_FEATURES}")
+            endif()
+
+            if(NOT "${IT_TARGET_${TARGET_IDX}_USED_BY}" STREQUAL "")
+                string(APPEND DESCRIPTION " - used by ${IT_TARGET_${TARGET_IDX}_USED_BY}")
+            endif()
+
+            set(LABEL "${IT_TARGET_${TARGET_IDX}_BOARD} - ${IT_TARGET_${TARGET_IDX}_LABEL}")
+            list(APPEND LINES "${IT_TARGET_${TARGET_IDX}_ID}|${LABEL}|${DESCRIPTION}")
+
+        endforeach()
+
+    endif()
+
+    if(IN_ALL_BOARDS AND
+       LINES)
+        list(APPEND LINES "${BUILD_HANDLER_ALL_BOARDS_TEXT}")
+    endif()
+
+    if(NOT LINES)
+        # No output - the error of the input shows this text
+        message("No board is connected to this machine or to an IT agent of ItHosts.json.")
+        return()
+    endif()
+
+    Prj_VSCode_PrintOptions(${LINES})
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Prj_VSCode_GetTarget
+# Description: Target (physical board) of an input by its ID - the boards file of the detection done by
+#              the input of the board (Prj_VSCode_PrintTargets). The MCU is the one of its preset.
+#
+# IN_ID   [in]:  ID of the target (<board>@<host>:<probe>).
+# OUT_IDX [out]: Index of the target (IT_TARGET_<idx>_* and IT_TARGET_<idx>_MCU in the parent scope).
+# ------------------------------------------------------------------------------
+function(Prj_VSCode_GetTarget IN_ID OUT_IDX)
+
+    IntegrationTesting_ReadTargets(TARGETS_CNT "${BUILD_HANDLER_BOARDS_FILE}")
+    IntegrationTesting_FindTarget(TARGET_IDX ${TARGETS_CNT} "${IN_ID}")
+
+    if(TARGET_IDX EQUAL -1)
+        message(FATAL_ERROR "Board '${IN_ID}' is not connected - pick the board again.")
+    endif()
+
+    foreach(SUFFIX IN LISTS IT_TARGET_SUFFIXES)
+        set(IT_TARGET_${TARGET_IDX}_${SUFFIX} "${IT_TARGET_${TARGET_IDX}_${SUFFIX}}" PARENT_SCOPE)
+    endforeach()
+
+    string(REGEX REPLACE "_IntegrationTest$" "" MCU "${IT_TARGET_${TARGET_IDX}_PRESET}")
+    set(IT_TARGET_${TARGET_IDX}_MCU "${MCU}" PARENT_SCOPE)
+
+    set(${OUT_IDX} ${TARGET_IDX} PARENT_SCOPE)
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Prj_VSCode_GetDebugPorts
+# Description: Ports of the debug server of a target - 127.0.0.1 of this machine (the debug configuration
+#              connects there, the tunnel of an IT agent listens there) and of the agent. They are given by
+#              the hash of the target (of its probe on the agent), the same target gets the same ports; a
+#              local port of an excluded port range of Windows (netsh) is moved behind it.
+#
+# IN_IDX     [in]:  Index of the target (Prj_VSCode_GetTarget).
+# OUT_LOCAL  [out]: Port of this machine.
+# OUT_REMOTE [out]: Port of the agent.
+# ------------------------------------------------------------------------------
+function(Prj_VSCode_GetDebugPorts IN_IDX OUT_LOCAL OUT_REMOTE)
+
+    string(MD5 LOCAL_HASH "${IT_TARGET_${IN_IDX}_ID}")
+    string(SUBSTRING "${LOCAL_HASH}" 0 6 LOCAL_HASH)
+    math(EXPR LOCAL_PORT "${VSCODE_DEBUG_LOCAL_PORT_BASE} + 0x${LOCAL_HASH} % ${VSCODE_DEBUG_PORT_RANGE}")
+
+    IntegrationTesting_Get_LockKey(PROBE_KEY "${IT_TARGET_${IN_IDX}_PROBE}")
+    string(MD5 REMOTE_HASH "${PROBE_KEY}")
+    string(SUBSTRING "${REMOTE_HASH}" 0 6 REMOTE_HASH)
+    math(EXPR REMOTE_PORT "${VSCODE_DEBUG_REMOTE_PORT_BASE} + 0x${REMOTE_HASH} % ${VSCODE_DEBUG_PORT_RANGE}")
+
+    if(CMAKE_HOST_WIN32)
+
+        execute_process(COMMAND netsh int ipv4 show excludedportrange protocol=tcp
+                        OUTPUT_VARIABLE NETSH_OUTPUT
+                        ERROR_QUIET)
+
+        string(REGEX MATCHALL "[0-9]+[ \t]+[0-9]+" EXCLUDED_RANGES "${NETSH_OUTPUT}")
+
+        foreach(TRY_IDX RANGE 1 ${VSCODE_DEBUG_PORT_RANGE})
+
+            set(EXCLUDED FALSE)
+
+            foreach(EXCLUDED_RANGE IN LISTS EXCLUDED_RANGES)
+                string(REGEX MATCH "([0-9]+)[ \t]+([0-9]+)" RANGE_MATCH "${EXCLUDED_RANGE}")
+                if(LOCAL_PORT GREATER_EQUAL CMAKE_MATCH_1 AND
+                   LOCAL_PORT LESS_EQUAL CMAKE_MATCH_2)
+                    set(EXCLUDED TRUE)
+                endif()
+            endforeach()
+
+            if(NOT EXCLUDED)
+                break()
+            endif()
+
+            math(EXPR LOCAL_PORT "${LOCAL_PORT} + 1")
+
+        endforeach()
+
+    endif()
+
+    set(${OUT_LOCAL}  ${LOCAL_PORT}  PARENT_SCOPE)
+    set(${OUT_REMOTE} ${REMOTE_PORT} PARENT_SCOPE)
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Prj_VSCode_PrintDebugBoardServer
+# Description: Prints the debug server of the picked board (127.0.0.1:<local port>, member "server" of
+#              the debug configuration) and writes the picked board into VSCODE_DEBUG_TARGET_FILE for the
+#              preLaunchTask (Prj_VSCode_ProbeRs.cmake DEBUG_SERVE).
+#
+# IN_ID [in]: ID of the picked board.
+# ------------------------------------------------------------------------------
+function(Prj_VSCode_PrintDebugBoardServer IN_ID)
+
+    Prj_VSCode_GetTarget("${IN_ID}" TARGET_IDX)
+    Prj_VSCode_GetDebugPorts(${TARGET_IDX} LOCAL_PORT REMOTE_PORT)
+
+    set(HOST "${IT_TARGET_${TARGET_IDX}_HOST}")
+    set(HOST_TOOLS "")
+
+    if(NOT "${HOST}" STREQUAL "${IT_LOCAL_HOST}")
+        IntegrationTesting_ReadItHosts(HOSTS "${PROJECT_ROOT_PATH}")
+        set(HOST_TOOLS "${IT_HOST_${HOST}_TOOLS}")
+    endif()
+
+    set(CONTENT "# Generated by the input debugServer of the debug configurations of a picked board (VS Code)\n")
+    string(APPEND CONTENT "set(DEBUG_TARGET_ID     [==[${IT_TARGET_${TARGET_IDX}_ID}]==])\n")
+    string(APPEND CONTENT "set(DEBUG_TARGET_TEXT   [==[${IT_TARGET_${TARGET_IDX}_TEXT}]==])\n")
+    string(APPEND CONTENT "set(DEBUG_MCU           [==[${IT_TARGET_${TARGET_IDX}_MCU}]==])\n")
+    string(APPEND CONTENT "set(DEBUG_BOARD         [==[${IT_TARGET_${TARGET_IDX}_BOARD}]==])\n")
+    string(APPEND CONTENT "set(DEBUG_HOST          [==[${HOST}]==])\n")
+    string(APPEND CONTENT "set(DEBUG_SSH_TARGET    [==[${IT_TARGET_${TARGET_IDX}_TARGET}]==])\n")
+    string(APPEND CONTENT "set(DEBUG_HOST_TOOLS    [==[${HOST_TOOLS}]==])\n")
+    string(APPEND CONTENT "set(DEBUG_PROBE         [==[${IT_TARGET_${TARGET_IDX}_PROBE}]==])\n")
+    string(APPEND CONTENT "set(DEBUG_LOCAL_PORT    ${LOCAL_PORT})\n")
+    string(APPEND CONTENT "set(DEBUG_REMOTE_PORT   ${REMOTE_PORT})\n")
+
+    file(WRITE "${VSCODE_DEBUG_TARGET_FILE}" "${CONTENT}")
+
+    Prj_VSCode_PrintOptions("127.0.0.1:${LOCAL_PORT}")
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Prj_VSCode_PrintDebugBoard
+# Description: Prints a value of the picked board for the debug configurations of a picked board - its
+#              probe, the chip, the SVD file, the Debug firmware or the integration test firmwares of its MCU.
+#
+# IN_ID   [in]: ID of the picked board.
+# IN_ITEM [in]: PROBE, CHIP, SVD, FIRMWARE or TESTS.
+# ------------------------------------------------------------------------------
+function(Prj_VSCode_PrintDebugBoard IN_ID IN_ITEM)
+
+    Prj_VSCode_GetTarget("${IN_ID}" TARGET_IDX)
+    set(MCU "${IT_TARGET_${TARGET_IDX}_MCU}")
+
+    if("${IN_ITEM}" STREQUAL "PROBE")
+        Prj_VSCode_PrintOptions("${IT_TARGET_${TARGET_IDX}_PROBE}")
+    elseif("${IN_ITEM}" STREQUAL "CHIP")
+        Prj_VSCode_PrintDebugChip("${MCU}")
+    elseif("${IN_ITEM}" STREQUAL "SVD")
+        Prj_VSCode_PrintDebugSvd("${MCU}")
+    elseif("${IN_ITEM}" STREQUAL "FIRMWARE")
+        # The Debug build of the board (its configuration - fixture, own defines), Build_Handler BUILD with BOARD
+        Build_Handler_Get_BoardBuild("${IT_TARGET_${TARGET_IDX}_BOARD}" Debug BOARD_MCU BOARD_PRESET BOARD_DIR)
+        Prj_VSCode_GetFirmwareName(Debug FIRMWARE)
+        Prj_VSCode_PrintOptions("${BOARD_DIR}/${FIRMWARE}")
+    elseif("${IN_ITEM}" STREQUAL "TESTS")
+        Prj_VSCode_PrintDebugTests(IT "${MCU}")
+    else()
+        message(FATAL_ERROR "Unknown item '${IN_ITEM}' of the picked board.")
+    endif()
 endfunction()
 
 
@@ -1560,13 +1924,16 @@ endfunction()
 # cmake -DFUNCTION_ID="EXTENSIONS_CHECK"                            -P Prj_VSCode_Handler.cmake : Print recommended extensions that are not installed
 # cmake -DFUNCTION_ID="EXTENSIONS_INSTALL"                          -P Prj_VSCode_Handler.cmake : Install the missing recommended extensions (code command)
 # cmake -DFUNCTION_ID="PICK_MCU"                                    -P Prj_VSCode_Handler.cmake : Print MCUs (input of the tasks)
-# cmake -DFUNCTION_ID="PICK_BOARD"                                  -P Prj_VSCode_Handler.cmake : Print boards of the integration tests (input of the tasks)
+# cmake -DFUNCTION_ID="PICK_BOARD"                                  -P Prj_VSCode_Handler.cmake : Detect and print the boards of this machine and of the IT agents and "All connected boards" (input of the integration test task)
 # cmake -DFUNCTION_ID="PICK_TEST_SET" -DTEST_TYPE=UT                -P Prj_VSCode_Handler.cmake : Print test sets of the unit tests (IT = integration tests, input of the tasks)
 # cmake -DFUNCTION_ID="DEBUG_CHIP" -DMCU=STM32F407xG                -P Prj_VSCode_Handler.cmake : Print probe-rs chip of the MCU (input of the debug configuration)
 # cmake -DFUNCTION_ID="DEBUG_SVD" -DMCU=STM32F407xG                  -P Prj_VSCode_Handler.cmake : Print SVD file of the MCU from the Ral module Svd (input of the debug configuration)
 # cmake -DFUNCTION_ID="DEBUG_GDB" -DMCU=STM32F407xG                  -P Prj_VSCode_Handler.cmake : Print host gdb of the unit tests of the MCU (input of the debug configuration)
 # cmake -DFUNCTION_ID="DEBUG_FIRMWARE" -DMCU=STM32F407xG -DBUILD_TYPE=Debug -P Prj_VSCode_Handler.cmake : Print firmware file of the MCU (input of the debug configuration)
 # cmake -DFUNCTION_ID="DEBUG_TESTS" -DTEST_TYPE=IT -DMCU=STM32F407xG -P Prj_VSCode_Handler.cmake : Print test executables of the MCU (UT or IT - input of the debug configuration)
+# cmake -DFUNCTION_ID="PICK_DEBUG_BOARD"                            -P Prj_VSCode_Handler.cmake : Detect and print the boards of this machine and of the IT agents (input debugBoard)
+# cmake -DFUNCTION_ID="DEBUG_BOARD_SERVER" -DTARGET=<ID>            -P Prj_VSCode_Handler.cmake : Print 127.0.0.1:<port> of the debug server of the picked board, write Build/DebugTarget.cmake
+# cmake -DFUNCTION_ID="DEBUG_BOARD_CHIP" -DTARGET=<ID>              -P Prj_VSCode_Handler.cmake : Print the probe (PROBE), chip (CHIP), SVD file (SVD), Debug firmware (FIRMWARE) or the integration tests (TESTS) of the picked board
 #==============================================================================#
 if(CMAKE_SCRIPT_MODE_FILE AND
    CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
@@ -1597,7 +1964,19 @@ if(CMAKE_SCRIPT_MODE_FILE AND
 
     elseif("${FUNCTION_ID}" STREQUAL "PICK_BOARD")
 
-        Prj_VSCode_PrintBoards()
+        Prj_VSCode_PrintTargets(TRUE)
+
+    elseif("${FUNCTION_ID}" STREQUAL "PICK_DEBUG_BOARD")
+
+        Prj_VSCode_PrintTargets(FALSE)
+
+    elseif("${FUNCTION_ID}" STREQUAL "DEBUG_BOARD_SERVER")
+
+        Prj_VSCode_PrintDebugBoardServer("${TARGET}")
+
+    elseif("${FUNCTION_ID}" MATCHES "^DEBUG_BOARD_(PROBE|CHIP|SVD|FIRMWARE|TESTS)$")
+
+        Prj_VSCode_PrintDebugBoard("${TARGET}" "${CMAKE_MATCH_1}")
 
     elseif("${FUNCTION_ID}" STREQUAL "PICK_TEST_SET")
 

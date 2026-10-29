@@ -21,7 +21,7 @@ running on the MCU. Module under test runs with real hardware and real dependent
   the board by its ID and flash size registers** and selects the probe of the matching board - more
   boards can be connected at the same time.
 - **Connected boards are detected** - the MCU of every probe is identified by the MCU identification of
-  the Ral presets (`Bsp/Ral/RalPresets.json`). `IntegrationTestBoards.json` of the project is optional,
+  the Ral presets (`Bsp/Ral/RalPresets.json`). `ItBoards.json` of the project is optional,
   it only overrides the detected boards (name, preset, probes, parameters).
 
 ---
@@ -38,6 +38,10 @@ running on the MCU. Module under test runs with real hardware and real dependent
 | `IntegrationTesting_Run.cmake` | Host script: probe selection, MCU check, download, start of test session, reset, waiting for the end (abort of blocked test case), reading of the output (`probe-rs`). |
 | `IntegrationTesting_Check.cmake` | Host script: result of one test function from the stored output. |
 | `IntegrationTesting_Probe.cmake` | Host helper: connected probes (`probe-rs list`), MCU identification of the Ral presets, register reads, probes of the board, probe-rs lookup (the artifact in the version configured for the integration test preset, downloaded in that version if it is missing; never probe-rs of the system or the newest cached version). |
+| `IntegrationTesting_Lock.cmake` | Host helper: probe lock - one client of a probe at a time (debugging, tests, detection, pipeline jobs), see [Probe lock](#probe-lock). |
+| `IntegrationTesting_Remote.cmake` | Host helper: IT agents of `ItHosts.json` and the [IT agent interface](#it-agent-interface) - `embi-agent` of the agent started over SSH, see [Boards of IT agents](#boards-of-it-agents). |
+| `IntegrationTesting_DebugServer.cmake` | Host script: debug server of a probe of this machine (`probe-rs dap-server` under the probe lock) - a board of an IT agent is served by `embi-agent debug-server`. |
+| `IntegrationTesting_Package.cmake` | Host script: the [test package](#test-package) of a build (input of `run-it` of an IT agent and of the pipeline jobs). |
 | `IntegrationTesting_Detect.cmake` | Host script: detection of connected boards -> `Build/IntegrationTestBoards.json`. |
 | `IntegrationTesting_AllBoards.cmake` | Host script: detection, build and execution of the tests on all connected boards. |
 
@@ -153,12 +157,235 @@ A board without override is named by its MCU (eg. `STM32F407xG`). Some MCUs shar
 > **Note:** boards are always named by their MCU - never by the development board (`NUCLEO_*`, `*DISCOVERY`).
 > Test sets of modules select pins and peripherals of the board by `IT_BOARD_<MCU>` (`INTEGRATION_TEST_BOARD`) and
 > list all MCUs with the same ID and flash size in one block (eg. `IT_BOARD_STM32G471xE` ... `IT_BOARD_STM32G484xE`
-> for NUCLEO-G474RE), so the board works without `IntegrationTestBoards.json`. A test set without a block for the
+> for NUCLEO-G474RE), so the board works without `ItBoards.json`. A test set without a block for the
 > MCU stops with `#error Board of ... integration tests is not defined` - the block is added to the test set.
+
+Besides the boards (configuration of the firmware: preset, parameters) the boards file lists the **targets** -
+one physical board per probe, of this machine (`"host": "local"`) and of every IT agent of `ItHosts.json`
+(see [Boards of IT agents](#boards-of-it-agents)). A target has the ID `<board>@<host>:<probe>` and a name of
+the board behind the probe (`label`): the fixture of the probe ([Board fixtures](#board-fixtures)), on an IT agent
+its `boards.conf`, otherwise the end of the serial number. A run of one target gives its probe
+(`INTEGRATION_TEST_PROBE`), so it uses exactly one physical board. A probe used by another client
+([Probe lock](#probe-lock)) is not read - its target of the previous detection stays listed with `usedBy`.
+
+**Two boards of one MCU** are two targets of one board. When the probes of such a board are not defined in
+`ItBoards.json`, the board is marked `"ambiguous"`: the boards may have a different wiring, so
+`INTEGRATION_TEST_PROBE` does not default to its probes and a run without a probe stops when more probes match
+(the first one is never taken). Boards with a **different wiring or other attached ICs** get two board names and
+their fixtures - see [Board fixtures](#board-fixtures).
+
+### Board fixtures
+
+The fixture of a physical board is what is connected to it - the wiring (eg. SPI1 to SPI2) and the attached ICs
+(eg. an I2C EEPROM). It is a hardware change, so it is configured manually per **serial number of the probe** (unique
+per board - the ST-LINK of a Nucleo / Discovery is a part of the board; a probe without a serial number, the
+ST-LINK/V2 of the first STM32F4DISCOVERY, is configured by its board name in `boards`):
+
+The board configuration of the project is **`ItBoards.json`** in the project root (it was `IntegrationTestBoards.json`,
+which is not read any more - the detection warns when only the old file exists):
+
+```json
+{
+    "probes": {
+        "001700084D4B500B20373831": { "host": "TestAgent", "name": "NUCLEO-H503RB #1", "board": "STM32H503xB",
+                                      "features": { "SPI1_SPI2_LOOP": {} } },
+        "0026003F3133510237363734": { "host": "local", "name": "NUCLEO-H503RB #2", "board": "STM32H503xB_Eeprom",
+                                      "features": { "EEPROM_24LC256": { "I2C": "1", "ADDRESS": "0x50" } } }
+    },
+    "boards": {
+        "STM32F407xG": { "host": "local", "name": "STM32F4DISCOVERY", "features": { "I2C1_I2C2_LOOP": {} } }
+    }
+}
+```
+
+| Member | Description |
+|---|---|
+| `host` | `local` (a board of this machine, the default) or the IT agent of the board (name of `ItHosts.json`) - debugging uses the probe-rs of this machine or the debug server of the agent. |
+| `name` | Name of the physical board in the board lists (VS Code, Setup) and messages. |
+| `board` | Board name of the firmware - the MCU (default) or a **variant** (eg. `STM32H503xB_Eeprom`): the probe is the board of that name with the preset of its MCU (identified on the probe, or `preset` of the board in `boards`). |
+| `features` | Wiring and attached ICs: `<FEATURE>` (letters, digits, `_`) with parameters `<KEY>: <value>` (eg. the I2C peripheral and the address of an IC). Probes of one board have the same features - one firmware is built per board. |
+| `defines` | Own defines of the board for its builds, given as written: `<NAME>: <value>` (`""` = `<NAME>` without a value). One board name has one set of defines. |
+| `stale` | `true`: the board is no longer in the configuration of its IT agent - the entry is kept, but not used (detection, debugging). |
+
+Where the boards are configured:
+- **Boards of the IT agents** - the inventory of the integration test pipeline `AzurePipelines/IntegrationTestBoards.yml`
+  of EmBi_Tester (versioned, `label` and `features` of every board), the only source. The pipeline builds the
+  packages with them and puts the configuration of the boards of every agent on the agent (`~/_tools/embi/ItBoards.json`,
+  this format without `host`). Every detection of this machine reads it from the agent (`embi-agent detect`) and
+  **updates the boards of that agent in `ItBoards.json`** of the project: every board of the agent is taken over with
+  `"host": "<agent>"`, a board of the agent that the agent no longer has gets `"stale": true`; the boards of this
+  machine and of other agents are not touched, the file is written only when it changes (an agent that is not reached
+  changes nothing).
+- **Boards of this machine** - `"host": "local"` entries of `ItBoards.json`, written by hand.
+
+A probe with a serial number that no configuration has is listed by the detection as a **new board** with its decoded
+MCU (`New boards (serial number not in the board configuration)`) - to be configured.
+
+The configuration of a board gives the compile definitions below (`IntegrationTesting_BoardConfig.cmake`) to the
+integration test firmware of the board (`IntegrationTesting.cmake`) and to the Debug / Release build of a picked board
+(`TARGET_BOARD`, a build folder of its own `Build/<MCU>_<Debug|Release>_<board>` - Build_Handler `BUILD` with `BOARD`,
+VS Code `EmBi: Build for board`, the Debug firmware of `EmBi: Debug on board`); a build without a board has none of
+them. Everything of the integration tests has the prefix `IT_`, the own `defines` are given as written:
+
+| Definition | Meaning |
+|---|---|
+| `IT_BOARD_<board>` | Board name (as without a fixture). |
+| `IT_BOARD_<MCU>` | MCU of a variant (board name other than the MCU) - the test sets keep their blocks of the MCU, only a test set that uses the variant needs a block of it (checked before the block of the MCU). |
+| `IT_FIXTURE` | The board has a fixture configured. |
+| `IT_FEATURE_<FEATURE>` | The board has the feature. |
+| `IT_FEATURE_<FEATURE>_<KEY>=<value>` | Parameter of the feature (eg. `IT_FEATURE_EEPROM_24LC256_ADDRESS=0x50`). |
+| `<NAME>=<value>` | Own define of the board (`defines`). |
+
+`IT_BOARD_<board>` and `IT_BOARD_<MCU>` are given to the integration test firmware only.
+
+A test that needs a feature is ignored on a board without it (skipped with the reason in the JUnit file). A board
+without a fixture (`IT_FIXTURE` not defined) keeps the behavior of the test set before the fixtures - the test set
+expects its documented wiring:
+
+```c
+void It_Spi_Poll_FullDuplex_DataExchanged( void )
+{
+#if defined(IT_FEATURE_SPI1_SPI2_LOOP) || \
+    !defined(IT_FIXTURE)
+    /* SPI1 and SPI2 are connected */
+#else
+    TEST_IGNORE_MESSAGE( "Board without the fixture SPI1_SPI2_LOOP" );
+#endif
+}
+```
+
+### Boards of IT agents
+
+An IT agent is a machine with debug probes other than this one - eg. a Linux host of the integration test
+pipeline. Its boards are detected, debugged and tested from this machine over SSH. `ItHosts.json` in the project
+root (optional, not versioned - the hosts and accounts of the developer) lists the agents:
+
+```json
+{
+    "hosts": {
+        "TestAgent": "root@192.168.1.100",
+        "Lab":       { "target": "pi@lab-host:2222", "tools": "/opt/embi/embi-agent" }
+    }
+}
+```
+
+| Member | Description |
+|---|---|
+| `<name>` | Name of the host in the board lists (letters, digits, `_`, `-`, `.`; `local` is this machine). |
+| `target` | `<user>@<host>[:<SSH port>]` - the key of this machine is authorized there (no password prompt, `BatchMode`). |
+| `tools` | `embi-agent` of the agent (the [IT agent interface](#it-agent-interface)), default `$HOME/_tools/embi/embi-agent` or `/home/*/_tools/embi/embi-agent` of the agent (installed by the pipeline `ItAgentUpdate` of EmBi_Tester). |
+
+The agent needs an SSH server and its agent tools `embi-agent` (EmBi_Tester, installed with probe-rs, the
+identification of the MCUs of all families and the board configuration of the agent by the pipeline
+`ItAgentUpdate`). This machine only starts them ([IT agent interface](#it-agent-interface)) - nothing of this
+machine is copied to the agent and executed there; ssh and scp of the system are used (OpenSSH, Windows 10 and newer
+has them). An agent that is not reachable, has no agent tools or another interface version is reported and its
+boards are not listed.
+
+- **Detection** (`embi-agent detect`): the agent reads its probes (probe-rs of the version of this machine) and
+  identifies their MCUs by the identification of all families; this machine forms the boards with the presets of this
+  project - a board of an MCU of another family is listed as not usable here (`... - family STM32U5 is not in this
+  project`), without a warning also when its fixture gives a board. Names and fixtures come from the board
+  configuration of the agent (the inventory of the pipeline).
+- **Debugging** (`embi-agent debug-server`, VS Code `EmBi: Debug on board`): the debug server of the agent behind
+  `ssh -tt -L <port of this machine>:127.0.0.1:<port of the agent>`.
+- **Integration tests on a board of an IT agent** are built here and executed there: the preset is configured with
+  `INTEGRATION_TEST_HOST=<name of ItHosts.json>` (and the probe of the target, `INTEGRATION_TEST_PROBE`), every
+  `<Name>.Run` packs its test set ([Test package](#test-package), label `<Name>`), copies it into a folder of the agent
+  (`new-package`), runs it there (`run-it` - probe lock and probe-rs of the agent, holder of this machine), copies the
+  output (and the coverage data) back and removes the folder (`remove-package`). The test functions, the JUnit file and
+  the coverage report are evaluated here as for a local board. The board lists of Setup (Tests -> Integration tests)
+  give it for a picked board; *All connected boards* tests the boards of the agents too (environment variables
+  `INTEGRATION_TEST_HOST`, `INTEGRATION_TEST_HOST_TOOLS` and `INTEGRATION_TEST_PROBE_SN` of the run, JUnit file
+  `IntegrationTestResults_<host>_<sn>.xml`).
+
+```bash
+cmake --preset STM32H503xB_IntegrationTest -DINTEGRATION_TEST_BOARD=STM32H503xB \
+      -DINTEGRATION_TEST_PROBE=0483:374e:001700084D4B500B20373831 -DINTEGRATION_TEST_HOST=TestAgent
+cmake --build --preset STM32H503xB_IntegrationTest
+ctest --preset STM32H503xB_IntegrationTest -L Gpio
+```
+
+### IT agent interface
+
+This machine talks to an IT agent **only** through `embi-agent` - the tools of the agent, installed on the agent
+from EmBi_Tester by a pipeline (`~/_tools/embi` of the pipeline user, with the identification of the MCUs of all
+families and the configuration of the boards of the agent). Nothing of this machine is copied to the agent and
+executed there; the only data an operation sends are the firmware of a debug session (probe-rs protocol) and a test
+package (`run-it`). The interface is defined here, the agent implements it.
+
+| Item | Definition |
+|---|---|
+| Version | `IT_AGENT_INTERFACE_VERSION` = **1** (`IntegrationTesting_Remote.cmake`). Every result carries `"interface"`; this machine refuses another version with an error naming both (update the agent tools or the platform). |
+| Call | `ssh <target> sh -c '<locator>' embi-agent <command> [--<option> <value>]...` - `<locator>` runs `tools` of the host in `ItHosts.json` (absolute path of `embi-agent` on the agent), otherwise the first executable `$HOME/_tools/embi/embi-agent` or `/home/*/_tools/embi/embi-agent`; none: exit code 127, `embi-agent is not installed on this IT agent`. |
+| Result | One line `EMBI-AGENT <JSON>` on the standard output (compact JSON on one line, `IT_AGENT_RESULT_PREFIX`); every other line is a log for people. Exit code 0 = done; otherwise the result has `"error": "<text>"` when the command got so far. `debug-server` has no result line. |
+| Cleanup | Every command removes the folders of earlier operations older than 24 hours (`/tmp/embi-it-*`, `/tmp/embi-dap-*`) - left by a terminated task or a broken connection. |
+| Probe lock | The agent takes the lock of a probe ([Probe lock](#probe-lock)) for every operation on it; `--holder` is the holder written for the developer machine (`<login>@<computer> (<purpose>)`). |
+
+| Command | Options | Result / behavior |
+|---|---|---|
+| `version` | - | `{"interface": 1, "tools": "<commit of EmBi_Tester>", "host": "<host name>"}` |
+| `detect` | [`--probe-rs <version>`] [`--holder <text>`] | `{"interface": 1, "host": "<host name>", "probes": [ <probe> ... ], "config": <configuration>}` - the connected probes and the board configuration of the agent; probe-rs of the version (default: the newest one of the agent), the holder of the lock while a probe is read. |
+| `debug-server` | `--probe <VID:PID:SN>` `--port <port>` `--probe-rs <version>` `--holder <text>` | probe-rs `dap-server` of the probe on the port of 127.0.0.1 of the agent for one session (this machine forwards the port, `ssh -L`), under the probe lock; prints `EmBi: debug server listening on port <port>` when it listens and ends with the session or the connection. probe-rs of the given version (the version of this machine) is installed on the agent when it is missing. |
+| `new-package` | - | `{"interface": 1, "dir": "/tmp/embi-it-<random>"}` - an empty folder of the agent for a test package (copied there by `scp`). |
+| `run-it` | `--package <dir>` `--probe <VID:PID:SN>` `--holder <text>` [`--label <ctest label regex>`] [`--lock-wait <s>`] | Runs the test package ([Test package](#test-package)) on the probe (`ItRun.cmake` of the agent): `{"interface": 1, "result": <exit code of ctest>, "notConnected": <true when no probe reads the MCU of the package>, "junit": "<dir>/IntegrationTestResults.xml"}`; the logs are in `<dir>/logs`, the coverage data in `<dir>/coverage/dumps`. |
+| `remove-package` | `--package <dir>` | Removes the folder of `new-package` (only `/tmp/embi-it-*`): `{"interface": 1}`. |
+
+`<probe>` of `detect`:
+
+```json
+{ "probe": "0483:374e:004A00383133510837363734", "serial": "004A00383133510837363734",
+  "mcus": [ "STM32U5A5xJ" ], "family": "STM32U5", "device": "STM32U5A5AJ",
+  "id": "0x481", "flashKB": 4096, "text": "ID 0x481, 4096 KB",
+  "label": "<name of boardNames of the agent>", "usedBy": "" }
+```
+
+- `mcus` - the MCUs (Ral preset names) whose identification matches, by the identification of all families; empty
+  when the MCU is not identified (`text` tells why). More MCUs = an ambiguous ID (eg. STM32F405xG / STM32F407xG).
+- `usedBy` - the holder of the lock of a probe used by another client: the probe is not read then (`mcus` empty).
+- `label` - the name of the board in the board names file of the agent (`/opt/hwgui/boards.conf`, the panel), "" if none.
+
+`<configuration>` of `detect` - the board configuration of the agent, the boards of the inventory of the pipeline
+(the format of `ItBoards.json` without `host`):
+
+```json
+{ "probes": { "<serial number>": { "name": "<abstract name>", "board": "<board name>",
+                                   "features": { "<X>": { "<KEY>": "<value>" } },
+                                   "defines": { "<NAME>": "<value>" } } },
+  "boards": { "<board name>": { "name": "<abstract name>", "features": {}, "defines": {} } } }
+```
+
+### Test package
+
+The integration tests of a build packed for a machine that builds nothing - the input of `run-it` of an IT agent and
+of the jobs of the integration test pipeline (the runner `ItRun.cmake` of EmBi_Tester). The packer is
+`IntegrationTesting_Package.cmake`; the format is a part of the [IT agent interface](#it-agent-interface).
+
+```
+<package>/
+  manifest.json            what is where (below)
+  firmware/IT_<Name>.elf   test firmware
+  firmware/IT_<Name>.nm    lines "<address> B integrationTesting_Mailbox" (and "... integrationTesting_Coverage"
+                           of a firmware with the coverage) - the runner has no arm-none-eabi-nm
+  host/                    the host scripts of this platform (Run, Probe, Check and their includes) in their layout
+                           of EmBi_Platform - they always match the platform the firmware was built with
+  logs/                    output of the firmware (written by the runner)
+  coverage/                only with INTEGRATION_TEST_COVERAGE: notes, sources and coverage scripts, dumps
+```
+
+| `manifest.json` | Content |
+|---|---|
+| `schema` | Version of the manifest (**1**) - the runner refuses another one. |
+| `created`, `board`, `source` | UTC time of the packing, the board name (`IT_BOARD_<name>`), module / commit / run and the commit of EmBi_Platform the firmware was built from. |
+| `probeRs` | Version of probe-rs the runner uses (installs it when missing). |
+| `hostConfig` | Values of `IntegrationTesting_Host.cmake` of the build (chip, ID and flash size registers, lock timeout) without the values of the machine of the build (`IT_PROBE_RS`, `IT_PROBE`, `IT_HOST`, `IT_HOST_TOOLS`, the coverage tools) - the runner writes the file again with its probe-rs and probe. |
+| `tests` | Every CTest test: name, kind (`run` / `check`), host script, parameters (paths relative to the package), properties. |
+| `coverage` | Only with the coverage: the build folder of the firmware and the dumps. |
+| `files` | Every file of the package with its SHA-256 (checked by the runner). |
 
 ### Boards of the project (optional override)
 
-`IntegrationTestBoards.json` in the project root (next to `CMakePresets.json`) is not needed - it only selects
+`ItBoards.json` in the project root (next to `CMakePresets.json`) is not needed - it only selects
 another MCU of an ambiguous ID, probes or parameters of the boards. Board names stay MCU names:
 
 ```json
@@ -200,7 +427,7 @@ board:
 ```bash
 cmake -P EmBi_Platform/CMake/IntegrationTesting/IntegrationTesting_AllBoards.cmake
 cmake -DIT_LABEL=Gpio -P EmBi_Platform/CMake/IntegrationTesting/IntegrationTesting_AllBoards.cmake
-# JUnit per probe: Build/<preset>/IntegrationTestResults_<sn>.xml
+# JUnit per probe: Build/<preset>/IntegrationTestResults_<sn>.xml (IT agent: IntegrationTestResults_<host>_<sn>.xml)
 ```
 
 Without `unity` artifact (not published yet) - artifacts list without `unity`:
@@ -222,6 +449,30 @@ Probe selection (`<Name>.Run`, `probe-rs list`):
    download).
 3. Without MCU ID the first candidate is used - only one probe may be connected, if no candidate is
    given.
+4. The selected probe is locked until the firmware run ends (see [Probe lock](#probe-lock)) - a
+   candidate used by another client is not read. When no free candidate matches, the probe used by
+   another client is waited for at most `INTEGRATION_TEST_LOCK_TIMEOUT` seconds.
+
+### Probe lock
+
+A debug probe is used by one client at a time - debugging, the integration tests of this host, the
+detection of connected boards and the jobs of the integration test pipeline on the IT agents
+(`ItRun.cmake` of EmBi_Tester) take the lock of the probe (`IntegrationTesting_Lock.cmake`). The
+lock is the lock of a file, the operating system releases it when its process ends - also when the
+process is killed or its SSH connection breaks, no lock stays behind.
+
+| Item | Protocol |
+|---|---|
+| Lock folder | Environment variable `INTEGRATION_TEST_LOCK_DIR`, otherwise `<temporary folder>/embi-probe-locks` (`/tmp` on Linux and macOS, `TEMP` on Windows), mode `0777` (the clients run as different users). |
+| Lock file | `probe-<key>.lock` (mode `0666`), `<key>` = serial number of the probe (`VID:PID:SN` or `SN`), `VID-PID` of a probe without a serial number; characters other than letters, digits, `-` and `_` are replaced by `_`. The file is never removed. |
+| Holder file | `probe-<key>.holder` (mode `0666`): `<holder>, since <YYYY-MM-DD hh:mm:ss> UTC`, written by the process that got the lock (`<login>@<computer> (<purpose>)`, `pipeline <definition> <run number>` in a pipeline job). |
+| Parent lock | Environment variable `INTEGRATION_TEST_PROBE_LOCKED` - keys of the probes locked by a parent process (eg. `ItRun.cmake` for its whole ctest run), separated by `;` or `,`. Their lock is not requested again (the lock of a file belongs to the process). |
+
+| Client | Lock |
+|---|---|
+| `<Name>.Run` (`IntegrationTesting_Run.cmake`) | The selected probe for the firmware run; a probe used by another client is waited for at most `INTEGRATION_TEST_LOCK_TIMEOUT` (default 600 s, environment variable of the same name overrides the host configuration), its holder is printed every minute. |
+| Detection (`IntegrationTesting_Detect.cmake`) | Every probe while its registers are read; a probe used by another client is not read, it is reported with its holder. |
+| Debug server (`IntegrationTesting_DebugServer.cmake`, `embi-agent debug-server` of an IT agent, VS Code `EmBi: Debug on board`) | The probe of the picked board for the whole debug session; a probe used by another client is not waited for - the session is not started and the holder is reported (a lock of the same holder, the previous session of a restart, is waited for 15 s). |
 
 Parameters:
 
@@ -242,6 +493,8 @@ Parameters:
 | `INTEGRATION_TEST_OUTPUT_SIZE` | `4096` | Unity output buffer [B] (RAM of the smallest MCU - H503 has 32 KB). |
 | `INTEGRATION_TEST_TIMEOUT` | `60` | Default timeout of all test cases of the firmware [s], `TIMEOUT` of the test overrides it. |
 | `INTEGRATION_TEST_CASE_TIMEOUT` | `10` | Default timeout of one test case [s], `CASE_TIMEOUT` of the test overrides it. |
+| `INTEGRATION_TEST_LOCK_TIMEOUT` | `600` | Longest wait for a probe used by another client [s] ([Probe lock](#probe-lock)); environment variable of the same name at test time overrides it. |
+| `INTEGRATION_TEST_HOST` | - | IT agent of the board: name of `ItHosts.json` or `<user>@<host>[:<SSH port>]`, empty = this machine ([Boards of IT agents](#boards-of-it-agents)); environment variable of the same name (SSH target) at test time overrides it. |
 | `INTEGRATION_TEST_OPTIMIZATION` | `-O0` | Optimization option of the test firmware. Devices with a small flash need a smaller firmware, e.g. `-Os` for STM32H7R / STM32H7S (64 KB flash: Adc test set 76.7 KB at `-O0`, 41.3 KB at `-Os`). Set it in the hidden preset `project` of `CMakePresets.json` or by `-DINTEGRATION_TEST_OPTIMIZATION=-Os`. |
 | `INTEGRATION_TEST_RUN_KNOWN_DEFECTS` | `OFF` | Execute tests marked by `IT_KNOWN_DEFECT()`. |
 

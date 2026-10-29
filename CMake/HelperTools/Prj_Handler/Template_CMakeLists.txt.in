@@ -62,6 +62,10 @@ set(CMAKE_C_STANDARD                    17)
 set(CMAKE_C_STANDARD_REQUIRED           ON)
 set(CMAKE_C_EXTENSIONS                  ON)
 
+set(CMAKE_CXX_STANDARD                  17)
+set(CMAKE_CXX_STANDARD_REQUIRED         ON)
+set(CMAKE_CXX_EXTENSIONS                ON)
+
 #=========================== DO NOT CHANGE THIS PART ==========================#
 #============================ Artifacts preparation ===========================#
 
@@ -72,25 +76,39 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/EmBi_Platform/CMake/ArtifactsHandler/ArtifactsHand
 endif()
 
 #========================== Build flags configuration =========================#
+# Options of the project for the MCU builds (Debug, Release, IntegrationTest) - the platform adds its own flags
+# (warnings, sections, system calls, link) in Build.cmake. The "UnitTest" build compiles for the host and does
+# not take them.
+if(NOT CMAKE_BUILD_TYPE STREQUAL "UnitTest")
 
-## Default build configuration
-if(CMAKE_BUILD_TYPE MATCHES Debug)
-    set(CMAKE_C_FLAGS               "${CMAKE_C_FLAGS} ${OPTIMIZATION_NONE} ${DEBUG_LEVEL_3}")
+    # Names of the flags (OPTIMIZATION_NONE, DISABLE_RTTI...) are used below
+    include(${CMAKE_SOURCE_DIR}/EmBi_Platform/CMake/Flags.cmake)
+
+    ## Optimization and debug information per build type - CMake adds CMAKE_<LANG>_FLAGS_<TYPE> after
+    ## CMAKE_<LANG>_FLAGS (its own defaults would be "-g" and "-O3 -DNDEBUG")
+    set(CMAKE_C_FLAGS_DEBUG             "${OPTIMIZATION_NONE} ${DEBUG_LEVEL_3}")
+    set(CMAKE_C_FLAGS_RELEASE           "${OPTIMIZATION_FULL} ${DEBUG_LEVEL_0} -DNDEBUG")
+    set(CMAKE_CXX_FLAGS_DEBUG           "${CMAKE_C_FLAGS_DEBUG}")
+    set(CMAKE_CXX_FLAGS_RELEASE         "${CMAKE_C_FLAGS_RELEASE}")
+    set(CMAKE_ASM_FLAGS_DEBUG           "${CMAKE_C_FLAGS_DEBUG}")
+    set(CMAKE_ASM_FLAGS_RELEASE         "${CMAKE_C_FLAGS_RELEASE}")
+
+    ## Assembler sources are preprocessed, dependency files are generated
+    set(CMAKE_ASM_FLAGS                 "${CMAKE_ASM_FLAGS} ${ASSEMBLER_MODE} ${GENERATE_DEPENDENCY_FILE}")
+
+    ## C++ without RTTI, exceptions and thread-safe initialization of statics
+    set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} ${DISABLE_RTTI}")
+    set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} ${DISABLE_EXCEPTIONS}")
+    set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} ${DISABLE_THREADSAFE_STATICS}")
+
+    ## Runtime library of C and C++ (newlib-nano)
+    set(CMAKE_C_FLAGS                   "${CMAKE_C_FLAGS} ${LINKER_NANO}")
+    set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} ${LINKER_NANO}")
+
+else()
+    # Host build of the unit tests - options of the host compiler are set by UnitTesting.cmake
 endif()
-if(CMAKE_BUILD_TYPE MATCHES Release)
-    set(CMAKE_C_FLAGS               "${CMAKE_C_FLAGS} ${OPTIMIZATION_NONE} ${DEBUG_LEVEL_0}")
-endif()
 
-set(CMAKE_ASM_FLAGS                 "${CMAKE_C_FLAGS} ${ASSEMBLER_MODE}")
-set(CMAKE_ASM_FLAGS                 "${CMAKE_ASM_FLAGS} ${GENERATE_DEPENDENCY_FILE}")
-set(CMAKE_ASM_FLAGS                 "${CMAKE_ASM_FLAGS} ${GENERATE_DEPENDENCY_FILE}")
-
-set(CMAKE_CXX_FLAGS                 "${CMAKE_C_FLAGS} ${DISABLE_RTTI}")
-set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} ${DISABLE_EXCEPTIONS}")
-set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} ${DISABLE_THREADSAFE_STATICS}")
-
-set(CMAKE_C_FLAGS                   "${CMAKE_C_FLAGS} ${LINKER_NANO}")
-                                    
 #================================ MCU build ===================================#
 
 # Core project settings

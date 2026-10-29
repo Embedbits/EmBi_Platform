@@ -79,7 +79,6 @@ else()
         string(REGEX MATCH "STM32([A-Z][0-9][A-Z0-9][0-9])" _ ${TARGET_MCU_TEMP})
         set(MCU_ID "STM32${CMAKE_MATCH_1}xx")
         message(STATUS "MCU_ID: ${MCU_ID}")
-        add_definitions(-D"STM32${MCU_ID}")
         
         # Generation of MCU_FAMILY_ID value (STM32U5xx, STM32F4xx...) - family of the
         # CMSIS device header, checked against RAL_TARGET_MCU_TYPE of Ral. STM32H7R /
@@ -146,8 +145,68 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "Release" OR 
 
     include("${CMAKE_CURRENT_LIST_DIR}/Flags.cmake")
 
-    # Build configuration flags (Necessary part before project build)
-    set(CMAKE_C_FLAGS                   "${ENABLE_ALL_WARNINGS} ${ENABLE_EXTRA_WARNINGS} ${REMOVE_UNUSED_DATA} ${REMOVE_UNUSED_FUNCTIONS} ${LINKER_NOSYS} ${LINKER_NOSTARTFILES}")
+    # Build configuration flags (Necessary part before project build) - the same for C and C++. Appended to the
+    # flags of the project CMakeLists.txt (build type options, runtime library), the modules (BSP, Middlewares,
+    # Application) take them over when they are added below.
+    set(PLATFORM_COMPILE_FLAGS          "${ENABLE_ALL_WARNINGS} ${ENABLE_EXTRA_WARNINGS}")
+    set(PLATFORM_COMPILE_FLAGS          "${PLATFORM_COMPILE_FLAGS} ${REMOVE_UNUSED_DATA} ${REMOVE_UNUSED_FUNCTIONS}")
+    set(PLATFORM_COMPILE_FLAGS          "${PLATFORM_COMPILE_FLAGS} ${LINKER_NOSYS} ${LINKER_NOSTARTFILES}")
+
+    set(CMAKE_C_FLAGS                   "${CMAKE_C_FLAGS} ${PLATFORM_COMPILE_FLAGS}")
+    set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} ${PLATFORM_COMPILE_FLAGS}")
+
+    # Debug information with the drive letter of the source paths in lower case (Windows): VS Code sends the
+    # paths of breakpoints so (d:\...) and a debug server of another machine (probe-rs dap-server of an IT
+    # agent, Linux) compares them with the paths of the debug information case sensitively
+    if(CMAKE_HOST_WIN32)
+
+        set(DEBUG_PREFIX_MAPS "")
+
+        foreach(BUILD_PATH IN ITEMS "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}")
+            if("${BUILD_PATH}" MATCHES "^([A-Z]):")
+                string(TOLOWER "${CMAKE_MATCH_1}" DRIVE_LOWER)
+                list(APPEND DEBUG_PREFIX_MAPS "-fdebug-prefix-map=${CMAKE_MATCH_1}:/=${DRIVE_LOWER}:/")
+            endif()
+        endforeach()
+
+        list(REMOVE_DUPLICATES DEBUG_PREFIX_MAPS)
+        add_compile_options(${DEBUG_PREFIX_MAPS})
+
+    endif()
+
+    # Build of a picked board (Debug / Release, a build folder of its own - Build_Handler BUILD with BOARD): the
+    # configuration of the board - its fixture (IT_FIXTURE, IT_FEATURE_<X>) and its own defines - for every target
+    # (boards file of the detection, IntegrationTesting_BoardConfig.cmake). The integration test build gives them
+    # its test firmware (INTEGRATION_TEST_BOARD).
+    set(TARGET_BOARD       "${TARGET_BOARD}"       CACHE STRING "Board of the build (configuration of ItBoards.json)")
+    set(TARGET_BOARDS_FILE "${TARGET_BOARDS_FILE}" CACHE FILEPATH "Boards file of the detection (TARGET_BOARD)")
+
+    if(NOT "${TARGET_BOARD}" STREQUAL "" AND
+       NOT CMAKE_BUILD_TYPE STREQUAL "IntegrationTest")
+
+        include("${CMAKE_CURRENT_LIST_DIR}/IntegrationTesting/IntegrationTesting_BoardConfig.cmake")
+
+        if("${TARGET_BOARDS_FILE}" STREQUAL "")
+            set(TARGET_BOARDS_FILE "${CMAKE_SOURCE_DIR}/Build/IntegrationTestBoards.json")
+        endif()
+
+        IntegrationTesting_Get_BoardFileDefinitions(TARGET_BOARD_DEFINITIONS
+                                                    TARGET_BOARD_FIXTURE
+                                                    TARGET_BOARD_DEFINES
+                                                    "${TARGET_BOARDS_FILE}"
+                                                    "${TARGET_BOARD}")
+
+        add_compile_definitions(${TARGET_BOARD_DEFINITIONS})
+
+        message(STATUS "Board:                ${TARGET_BOARD}")
+        if(NOT "${TARGET_BOARD_FIXTURE}" STREQUAL "")
+            message(STATUS "Fixture:              ${TARGET_BOARD_FIXTURE}")
+        endif()
+        if(NOT "${TARGET_BOARD_DEFINES}" STREQUAL "")
+            message(STATUS "Defines of the board: ${TARGET_BOARD_DEFINES}")
+        endif()
+
+    endif()
 
     if(CMAKE_BUILD_TYPE STREQUAL "IntegrationTest")
         if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/IntegrationTesting/IntegrationTesting.cmake")
@@ -179,13 +238,19 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "Release" OR 
         message(WARNING "Application module not found. Skipping...")
     endif()
     
-    # Build necessary flags
-    set(CMAKE_C_FLAGS                   "${CMAKE_C_FLAGS} ${ENABLE_GC_SECTIONS}")
-    set(CMAKE_C_FLAGS                   "${CMAKE_C_FLAGS} ${LINKER_START_GROUP} ${LINK_LIB_C} ${LINK_LIB_MATH} ${LINKER_END_GROUP}")
-    set(CMAKE_C_FLAGS                   "${CMAKE_C_FLAGS} ${PRINT_HEADER_DEPENDENCIES}")
-    set(CMAKE_C_FLAGS                   "${CMAKE_C_FLAGS} ${PRINT_MEMORY_USAGE}")
+    # Build necessary flags (link) - the same for C and C++ executables, C++ adds its libraries. The C++ flags
+    # already hold the project and platform flags, the C flags are not copied into them (GCC rejects
+    # --specs=nosys.specs given twice).
+    set(PLATFORM_LINK_FLAGS             "${ENABLE_GC_SECTIONS}")
+    set(PLATFORM_LINK_FLAGS             "${PLATFORM_LINK_FLAGS} ${LINKER_START_GROUP} ${LINK_LIB_C} ${LINK_LIB_MATH}")
+    set(PLATFORM_LINK_FLAGS             "${PLATFORM_LINK_FLAGS} ${LINKER_END_GROUP}")
+    set(PLATFORM_LINK_FLAGS             "${PLATFORM_LINK_FLAGS} ${PRINT_HEADER_DEPENDENCIES}")
+    set(PLATFORM_LINK_FLAGS             "${PLATFORM_LINK_FLAGS} ${PRINT_MEMORY_USAGE}")
 
-    set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} ${CMAKE_C_FLAGS} ${LINKER_START_GROUP} ${LINK_LIB_STDCPP} ${LINK_LIB_SUPCXX} ${LINKER_END_GROUP}")
+    set(CMAKE_C_FLAGS                   "${CMAKE_C_FLAGS} ${PLATFORM_LINK_FLAGS}")
+    set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} ${PLATFORM_LINK_FLAGS}")
+    set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} ${LINKER_START_GROUP} ${LINK_LIB_STDCPP}")
+    set(CMAKE_CXX_FLAGS                 "${CMAKE_CXX_FLAGS} ${LINK_LIB_SUPCXX} ${LINKER_END_GROUP}")
 
     # Update linker script path
     set(CMAKE_C_FLAGS                   "${CMAKE_C_FLAGS} -T \"${LINKER_SCRIPT}\" -Wl,-Map=${PROJECT_NAME}.map")

@@ -33,6 +33,7 @@
 #include "IntegrationTesting_Target.h"      /* Target interface (test set)    */
 #include "unity.h"                          /* Unity testing framework        */
 #include "stdatomic.h"                      /* Memory barriers                */
+#include "stddef.h"                         /* offsetof                       */
 #if defined(IT_COVERAGE)
 #include "IntegrationTesting_Coverage.h"    /* Code coverage (gcov)           */
 #endif
@@ -46,6 +47,7 @@ static void integrationTesting_CheckInterrupted ( void );
 static void integrationTesting_RunCase          ( void );
 static void integrationTesting_NextCase         ( void );
 static void integrationTesting_Reset            ( void );
+static void integrationTesting_MailboxFlush     ( void );
 static void integrationTesting_Finish           ( void );
 static void integrationTesting_PutCaseFail      ( void );
 static void integrationTesting_PutLineStart     ( void );
@@ -74,6 +76,12 @@ static void integrationTesting_Idle             ( void );
 /** Test function name used for failures outside of any test case */
 #define IT_CORE_NAME                        "IntegrationTesting"
 
+/** Size of the widest ECC word of a RAM [B] (64-bit ECC word of STM32H7 AXI SRAM) - alignment of the mailbox */
+#define IT_RAM_ECC_WORD_SIZE                ( 8u )
+
+/** Count of ECC words of \ref IT_RAM_ECC_WORD_SIZE of the mailbox header (the header is 12 words - 6 ECC words) */
+#define IT_MAILBOX_HEADER_ECC_WORDS         ( offsetof( integrationTesting_Mailbox_t, Output ) / IT_RAM_ECC_WORD_SIZE )
+
 /* ============================== MACROS ==================================== */
 
 /* ========================= EXPORTED VARIABLES ============================= */
@@ -82,7 +90,7 @@ static void integrationTesting_Idle             ( void );
  * Result mailbox read by host. Located in ".noinit" - not initialized by the
  * startup code, content is kept over system reset between the test cases.
  */
-__attribute__((section(".noinit")))
+__attribute__((section(".noinit"), aligned(IT_RAM_ECC_WORD_SIZE)))
 integrationTesting_Mailbox_t integrationTesting_Mailbox;
 
 /* ========================== LOCAL VARIABLES =============================== */
@@ -265,6 +273,9 @@ integrationTesting_Stage_t IntegrationTesting_Get_Stage( void )
 void IntegrationTesting_Set_ResetExpected( void )
 {
     integrationTesting_Mailbox.CasePhase = IT_CASE_RESET_EXPECTED;
+
+    /* The mark has to survive the reset of the test case */
+    integrationTesting_MailboxFlush();
 }
 
 /* ========================== LOCAL FUNCTIONS =============================== */
@@ -421,7 +432,52 @@ static void integrationTesting_Reset( void )
     /* Mailbox is written before the reset */
     atomic_thread_fence( memory_order_seq_cst );
 
+    integrationTesting_MailboxFlush();
+
     ItTarget_SystemReset();
+}
+
+
+/**
+ * \brief Completes the writes of the mailbox in the RAM before a reset of the MCU.
+ *
+ * RAM with ECC per 64-bit word (STM32H7 AXI SRAM, RM0468 "Error code correction": a write narrower than the
+ * ECC word is not really written to the SRAM when a reset occurs): TestIndex was lost over the reset between the
+ * test cases on STM32H723 (32-bit writes, also when written twice). Every ECC word of the header and the ECC word
+ * with the end of the output are written again with their own value by one 64-bit access each (a complete ECC
+ * word). Layout and content of the mailbox are unchanged (host interface); on a RAM without this behavior the
+ * words are only written again.
+ */
+static void integrationTesting_MailboxFlush( void )
+{
+    volatile uint64_t * const mailboxEccWords = (volatile uint64_t *)&integrationTesting_Mailbox;
+    const uint32_t            outputLength    = integrationTesting_Mailbox.Length;
+    uint32_t                  outputEccWord   = 0u;
+
+    atomic_thread_fence( memory_order_seq_cst );
+
+    for( uint32_t eccWordIdx = 0u; IT_MAILBOX_HEADER_ECC_WORDS > eccWordIdx; eccWordIdx++ )
+    {
+        const uint64_t value = mailboxEccWords[ eccWordIdx ];
+
+        mailboxEccWords[ eccWordIdx ] = value;
+    }
+
+    if( 0u < outputLength )
+    {
+        /* ECC word with the last character of the output (Output starts at an ECC word boundary) */
+        outputEccWord = ( ( outputLength - 1u ) / IT_RAM_ECC_WORD_SIZE ) + IT_MAILBOX_HEADER_ECC_WORDS;
+
+        const uint64_t value = mailboxEccWords[ outputEccWord ];
+
+        mailboxEccWords[ outputEccWord ] = value;
+    }
+    else
+    {
+        /* No output yet */
+    }
+
+    atomic_thread_fence( memory_order_seq_cst );
 }
 
 
@@ -459,6 +515,9 @@ static void integrationTesting_Finish( void )
     atomic_thread_fence( memory_order_seq_cst );
 
     integrationTesting_Mailbox.State = IT_STATE_FINISHED;
+
+    /* Results are kept over a later reset (debugger, button) */
+    integrationTesting_MailboxFlush();
 }
 
 

@@ -36,12 +36,14 @@
 #                                   Parameters of the board are taken from the boards file.
 #   INTEGRATION_TEST_BOARDS_FILE  - Boards file (default Build/IntegrationTestBoards.json -
 #                                   connected boards written by IntegrationTesting_Detect.cmake
-#                                   from the optional IntegrationTestBoards.json of the project):
+#                                   from the optional ItBoards.json of the project):
 #                                   preset, probes and parameters (below) of every board, used
 #                                   for parameters which are not set.
 #   INTEGRATION_TEST_PROBE        - Probes of the board - probe-rs selectors (VID:PID[:SN])
 #                                   or serial numbers (list). Empty: probes of the board in the
-#                                   boards file, all connected probes without it.
+#                                   boards file, all connected probes without it. More probes of
+#                                   one MCU detected without an override ("ambiguous" board) are
+#                                   not taken - a run then needs one of them.
 #                                   Environment variable INTEGRATION_TEST_PROBE_SN selects
 #                                   the probe when the tests are executed (more equal boards).
 #   INTEGRATION_TEST_PROBE_RS_CHIP - probe-rs chip name (default: TARGET_MCU if probe-rs
@@ -60,6 +62,14 @@
 #   INTEGRATION_TEST_TIMEOUT      - Default timeout of test firmware execution [s]
 #   INTEGRATION_TEST_CASE_TIMEOUT - Default timeout of one test case [s], blocked test
 #                                   case is aborted by host (reset of MCU)
+#   INTEGRATION_TEST_HOST         - IT agent of the board: name of ItHosts.json of the project or
+#                                   <user>@<host>[:<SSH port>] (empty = this machine). The firmware
+#                                   is copied to the agent and executed there (IntegrationTesting_Run.cmake,
+#                                   IntegrationTesting_Remote.cmake), the output is evaluated here.
+#   INTEGRATION_TEST_LOCK_TIMEOUT - Longest wait for a probe used by another client [s]
+#                                   (default 600): the probe of the tests is locked
+#                                   (IntegrationTesting_Lock.cmake) - debugging, a pipeline
+#                                   job and the tests use a probe one after the other
 #   INTEGRATION_TEST_OPTIMIZATION - Optimization option of the test firmware (default -O0).
 #                                   Devices with small flash (STM32H7R / STM32H7S: 64 KB) use
 #                                   -Os, the firmware of bigger test sets does not fit at -O0.
@@ -158,6 +168,12 @@ set(INTEGRATION_TEST_TIMEOUT            "60"
 set(INTEGRATION_TEST_CASE_TIMEOUT       "10"
     CACHE STRING                        "Default timeout of one integration test case [s]")
 
+set(INTEGRATION_TEST_LOCK_TIMEOUT       "600"
+    CACHE STRING                        "Longest wait for a probe used by another client (debugging, pipeline job) [s]")
+
+set(INTEGRATION_TEST_HOST               ""
+    CACHE STRING                        "IT agent of the board - name of ItHosts.json or <user>@<host>[:<port>]")
+
 option(INTEGRATION_TEST_RUN_KNOWN_DEFECTS "Execute tests of known defects (IT_KNOWN_DEFECT) instead of ignoring them" OFF)
 
 option(INTEGRATION_TEST_COVERAGE        "Code coverage (gcov) of the tested modules" OFF)
@@ -178,6 +194,7 @@ set(INTEGRATION_TEST_OPTIMIZATION       "${OPTIMIZATION_NONE}"
 
 # Build type specific flags (as CMAKE_C_FLAGS_DEBUG) - test firmware is debuggable
 set(CMAKE_C_FLAGS_INTEGRATIONTEST       "${INTEGRATION_TEST_OPTIMIZATION} ${DEBUG_LEVEL_3}")
+set(CMAKE_CXX_FLAGS_INTEGRATIONTEST     "${CMAKE_C_FLAGS_INTEGRATIONTEST}")
 set(CMAKE_ASM_FLAGS_INTEGRATIONTEST     "${DEBUG_LEVEL_3}")
 
 #============================= Tools localization =============================#
@@ -209,6 +226,12 @@ endif()
 
 #============================ Board parameters ================================#
 
+# Compile definitions of the configuration of a board (fixture, own defines)
+include("${INTEGRATION_TESTING_DIR}/IntegrationTesting_BoardConfig.cmake")
+
+# Compile definitions of the test firmware given by the board (variant of the board, its fixture)
+set(INTEGRATION_TEST_BOARD_DEFINITIONS  "")
+
 # Parameters of the board from the boards file - used for parameters which are
 # not set (command line, preset and cache have priority):
 #   { "boards": { "<INTEGRATION_TEST_BOARD>": { "preset": "<configure preset>",
@@ -225,7 +248,23 @@ if(INTEGRATION_TEST_BOARD AND EXISTS "${INTEGRATION_TEST_BOARDS_FILE}")
     else()
         string(JSON IT_PROBES_CNT ERROR_VARIABLE IT_PROBES_ERROR LENGTH "${IT_BOARD_CONFIG}" probes)
 
-        if(NOT INTEGRATION_TEST_PROBE AND NOT IT_PROBES_ERROR AND IT_PROBES_CNT GREATER 0)
+        # More probes of one MCU detected without the probes of the board in the boards file of the
+        # project ("ambiguous"): the boards may have a different wiring - the probe is selected per run
+        string(JSON IT_BOARD_AMBIGUOUS ERROR_VARIABLE IT_AMBIGUOUS_ERROR GET "${IT_BOARD_CONFIG}" ambiguous)
+        if(IT_AMBIGUOUS_ERROR)
+            set(IT_BOARD_AMBIGUOUS OFF)
+        endif()
+
+        if(IT_BOARD_AMBIGUOUS AND
+           NOT INTEGRATION_TEST_PROBE)
+            message(STATUS "Board ${INTEGRATION_TEST_BOARD} has ${IT_PROBES_CNT} probes in ${INTEGRATION_TEST_BOARDS_FILE} - "
+                           "the probe of a run is given by INTEGRATION_TEST_PROBE or INTEGRATION_TEST_PROBE_SN.")
+        endif()
+
+        if(NOT INTEGRATION_TEST_PROBE AND
+           NOT IT_BOARD_AMBIGUOUS AND
+           NOT IT_PROBES_ERROR AND
+           IT_PROBES_CNT GREATER 0)
             math(EXPR IT_PROBES_LAST "${IT_PROBES_CNT} - 1")
 
             foreach(IT_PROBE_IDX RANGE ${IT_PROBES_LAST})
@@ -248,8 +287,40 @@ if(INTEGRATION_TEST_BOARD AND EXISTS "${INTEGRATION_TEST_BOARDS_FILE}")
                 endif()
             endforeach()
         endif()
+
+        # Configuration of the board - its fixture (wiring, attached ICs: IT_FIXTURE, IT_FEATURE_<X>,
+        # IT_FEATURE_<X>_<KEY>=<value>) and its own defines, compile definitions of the test firmware
+        # (IntegrationTesting_BoardConfig.cmake, README "Board fixtures")
+        IntegrationTesting_Get_BoardDefinitions(IT_CONFIG_DEFINITIONS
+                                                IT_FIXTURE_TEXT
+                                                IT_DEFINES_TEXT
+                                                "${IT_BOARD_CONFIG}"
+                                                "${INTEGRATION_TEST_BOARD}")
+
+        list(APPEND INTEGRATION_TEST_BOARD_DEFINITIONS ${IT_CONFIG_DEFINITIONS})
+
+        if(NOT "${IT_FIXTURE_TEXT}" STREQUAL "")
+            message(STATUS "Fixture:              ${IT_FIXTURE_TEXT}")
+        endif()
+
+        if(NOT "${IT_DEFINES_TEXT}" STREQUAL "")
+            message(STATUS "Defines of the board: ${IT_DEFINES_TEXT}")
+
+            # The own defines of the board are given to every target (modules, Startup) as in a Debug / Release
+            # build of the board (Build.cmake), the fixture stays a definition of the test firmware only
+            string(REPLACE ", " ";" IT_OWN_DEFINITIONS "${IT_DEFINES_TEXT}")
+            add_compile_definitions(${IT_OWN_DEFINITIONS})
+        endif()
     endif()
 
+endif()
+
+# A variant of a board (a board name other than the MCU, eg. STM32H503xB_Eeprom - another wiring or other
+# attached ICs) keeps the blocks of its MCU in the test sets (IT_BOARD_<MCU>)
+if(INTEGRATION_TEST_BOARD AND
+   TARGET_MCU_FULL_NAME AND
+   NOT "${INTEGRATION_TEST_BOARD}" STREQUAL "${TARGET_MCU_FULL_NAME}")
+    list(APPEND INTEGRATION_TEST_BOARD_DEFINITIONS IT_BOARD_${TARGET_MCU_FULL_NAME})
 endif()
 
 # MCU identification of the target MCU preset (TARGET_MCU_FULL_NAME, eg.
@@ -285,7 +356,9 @@ endif()
 
 # probe-rs chip - device of the MCU identification or TARGET_MCU, the first one
 # probe-rs knows ("probe-rs chip info"); naming of MCUs is not interpreted (the
-# board defines its chip otherwise)
+# board defines its chip otherwise); a partial name accepted by probe-rs with a
+# warning ("Found chip <full> which matches given partial name <candidate>") is
+# replaced by the full name, so later probe-rs calls print no warning
 if(NOT INTEGRATION_TEST_PROBE_RS_CHIP AND PROBE_RS_EXECUTABLE)
 
     foreach(IT_CHIP_CANDIDATE IN ITEMS "${IT_IDENTIFICATION_DEVICE}" "${TARGET_MCU_FULL_NAME}")
@@ -296,11 +369,19 @@ if(NOT INTEGRATION_TEST_PROBE_RS_CHIP AND PROBE_RS_EXECUTABLE)
 
         execute_process(COMMAND "${PROBE_RS_EXECUTABLE}" chip info "${IT_CHIP_CANDIDATE}"
                         RESULT_VARIABLE IT_CHIP_RESULT
-                        OUTPUT_QUIET
-                        ERROR_QUIET)
+                        OUTPUT_VARIABLE IT_CHIP_OUTPUT
+                        ERROR_VARIABLE  IT_CHIP_OUTPUT)
 
         if(IT_CHIP_RESULT EQUAL 0)
-            set(INTEGRATION_TEST_PROBE_RS_CHIP "${IT_CHIP_CANDIDATE}")
+            string(REGEX MATCH "Found chip ([A-Za-z0-9_]+) which matches given partial name" IT_CHIP_PARTIAL
+                   "${IT_CHIP_OUTPUT}")
+
+            if(IT_CHIP_PARTIAL)
+                set(INTEGRATION_TEST_PROBE_RS_CHIP "${CMAKE_MATCH_1}")
+            else()
+                set(INTEGRATION_TEST_PROBE_RS_CHIP "${IT_CHIP_CANDIDATE}")
+            endif()
+
             break()
         endif()
 
@@ -329,6 +410,25 @@ if(NOT INTEGRATION_TEST_ID_ADDRESS)
     message(STATUS "INTEGRATION_TEST_ID_ADDRESS is not set - MCU on the board is not checked.")
 endif()
 
+# IT agent of the board (ItHosts.json of the project, IntegrationTesting_Remote.cmake) - the firmware is
+# executed there by its agent tools (IT agent interface, embi-agent run-it of IntegrationTesting_Run.cmake)
+set(IT_HOST_TARGET   "")
+set(IT_HOST_TOOLS    "")
+
+if(NOT "${INTEGRATION_TEST_HOST}" STREQUAL "" AND
+   NOT "${INTEGRATION_TEST_HOST}" STREQUAL "local")
+
+    include("${INTEGRATION_TESTING_DIR}/IntegrationTesting_Remote.cmake")
+
+    IntegrationTesting_Get_HostTarget(IT_HOST_TARGET "${INTEGRATION_TEST_HOST}" "${CMAKE_SOURCE_DIR}")
+    IntegrationTesting_ReadItHosts(IT_HOSTS "${CMAKE_SOURCE_DIR}")
+
+    if("${INTEGRATION_TEST_HOST}" IN_LIST IT_HOSTS)
+        set(IT_HOST_TOOLS "${IT_HOST_${INTEGRATION_TEST_HOST}_TOOLS}")
+    endif()
+
+endif()
+
 # Host configuration - parameters of IntegrationTesting_Run.cmake (CTest) and
 # IntegrationTesting_AllBoards.cmake
 set(INTEGRATION_TEST_HOST_CONFIG        "${CMAKE_BINARY_DIR}/IntegrationTesting_Host.cmake")
@@ -343,6 +443,10 @@ set(IT_ID_MASK    [==[${INTEGRATION_TEST_ID_MASK}]==])
 set(IT_ID_VALUE   [==[${INTEGRATION_TEST_ID_VALUE}]==])
 set(IT_FLASH_SIZE_ADDRESS [==[${INTEGRATION_TEST_FLASH_SIZE_ADDRESS}]==])
 set(IT_FLASH_SIZE_KB      [==[${INTEGRATION_TEST_FLASH_SIZE_KB}]==])
+set(IT_LOCK_TIMEOUT       [==[${INTEGRATION_TEST_LOCK_TIMEOUT}]==])
+set(IT_HOST               [==[${IT_HOST_TARGET}]==])
+set(IT_HOST_TOOLS         [==[${IT_HOST_TOOLS}]==])
+set(IT_BOARD              [==[${INTEGRATION_TEST_BOARD}]==])
 ")
 
 message(STATUS "Unity:                ${UNITY_ROOT}")
@@ -350,6 +454,7 @@ message(STATUS "probe-rs:             ${PROBE_RS_EXECUTABLE}")
 message(STATUS "Board:                ${INTEGRATION_TEST_BOARD}")
 message(STATUS "Chip:                 ${INTEGRATION_TEST_PROBE_RS_CHIP}")
 message(STATUS "Probe:                ${INTEGRATION_TEST_PROBE}")
+message(STATUS "IT agent:             ${IT_HOST_TARGET}")
 message(STATUS "MCU ID:               ${INTEGRATION_TEST_ID_ADDRESS} & ${INTEGRATION_TEST_ID_MASK} == ${INTEGRATION_TEST_ID_VALUE}")
 message(STATUS "Flash size:           ${INTEGRATION_TEST_FLASH_SIZE_ADDRESS} == ${INTEGRATION_TEST_FLASH_SIZE_KB} KB")
 
@@ -754,6 +859,7 @@ function(IntegrationTesting_Add_Test)
             INTEGRATION_TEST
             $<$<BOOL:${INTEGRATION_TEST_BOARD}>:IT_BOARD_${INTEGRATION_TEST_BOARD}>
             $<$<BOOL:${INTEGRATION_TEST_RUN_KNOWN_DEFECTS}>:IT_RUN_KNOWN_DEFECTS>
+            ${INTEGRATION_TEST_BOARD_DEFINITIONS}
             ${IT_DEFINITIONS}
     )
 

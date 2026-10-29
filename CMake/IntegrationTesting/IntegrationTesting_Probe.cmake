@@ -30,7 +30,9 @@
 #                           "idAddress": "0xE0042000", "idMask": "0x00000FFF", "idValue": "0x413",
 #                           "flashSizeAddress": "0x1FFF7A22", "flashSizeKB": 1024 } } }
 # The core is a generic probe-rs target - registers are read before the chip
-# of the board is known. The device is the default probe-rs chip of the MCU.
+# of the board is known. The device is the default probe-rs chip of the MCU (it
+# also reads the registers of an MCU the generic core does not reach, eg.
+# STM32H503).
 ################################################################################
 
 include_guard(GLOBAL)
@@ -41,6 +43,9 @@ include_guard(GLOBAL)
 set(ARTIFACTS_HANDLER_NO_RUN TRUE)
 include("${CMAKE_CURRENT_LIST_DIR}/../ArtifactsHandler/ArtifactsHandler.cmake")
 unset(ARTIFACTS_HANDLER_NO_RUN)
+
+# Probe lock - one client of a probe at a time (selection of the probe of the tests, detection)
+include("${CMAKE_CURRENT_LIST_DIR}/IntegrationTesting_Lock.cmake")
 
 # Vendor key of EmBi data in CMake presets
 set(IT_PRESETS_VENDOR_KEY               "embedbits.com/EmBi")
@@ -332,6 +337,8 @@ endfunction(IntegrationTesting_ReadRegister)
 # Identifies the MCU connected to the probe - reads ID register (and flash size
 # register) with the generic core of every identification of the MCUs
 # (IntegrationTesting_ReadMcuIdentification) and returns the matching MCUs.
+# When the generic core does not read the registers, the devices of the MCUs of
+# the same register set are tried (the first device that reads them is used).
 #
 # MATCHED_VAR [out]: List of MCUs matching ID and flash size
 # TEXT_VAR    [out]: Read values for messages ("ID 0x413, 1024 KB" / "ID not read")
@@ -355,14 +362,55 @@ function(IntegrationTesting_IdentifyProbe MATCHED_VAR TEXT_VAR SELECTOR MCUS)
 
         IntegrationTesting_ReadRegister(MCU_ID "${SELECTOR}" "${IT_MCU_${MCU}_CORE}"
                                         "${IT_MCU_${MCU}_ID_ADDRESS}" b32 "${IT_MCU_${MCU}_ID_MASK}")
+        set(READ_CHIP "${IT_MCU_${MCU}_CORE}")
+
+        # The generic core does not reach the registers of some MCUs (STM32H503: SwdApWdataError) -
+        # the devices of the MCUs of the same register set are tried then, the first one that reads wins
+        if(NOT MCU_ID)
+
+            set(DEVICES_TRIED "")
+
+            foreach(CANDIDATE IN LISTS MCUS)
+
+                set(CANDIDATE_PLAN "${IT_MCU_${CANDIDATE}_CORE}|${IT_MCU_${CANDIDATE}_ID_ADDRESS}|${IT_MCU_${CANDIDATE}_ID_MASK}|${IT_MCU_${CANDIDATE}_FLASH_SIZE_ADDRESS}")
+                set(DEVICE "${IT_MCU_${CANDIDATE}_DEVICE}")
+
+                if(NOT "${CANDIDATE_PLAN}" STREQUAL "${PLAN}" OR
+                   "${DEVICE}" STREQUAL "" OR
+                   "${DEVICE}" IN_LIST DEVICES_TRIED)
+                    continue()
+                endif()
+
+                list(APPEND DEVICES_TRIED "${DEVICE}")
+
+                IntegrationTesting_ReadRegister(MCU_ID
+                                                "${SELECTOR}"
+                                                "${DEVICE}"
+                                                "${IT_MCU_${MCU}_ID_ADDRESS}"
+                                                b32
+                                                "${IT_MCU_${MCU}_ID_MASK}")
+
+                if(MCU_ID)
+                    set(READ_CHIP "${DEVICE}")
+                    break()
+                endif()
+
+            endforeach()
+
+        endif()
+
         if(NOT MCU_ID)
             continue()
         endif()
 
         set(FLASH_SIZE_KB "")
         if(IT_MCU_${MCU}_FLASH_SIZE_ADDRESS)
-            IntegrationTesting_ReadRegister(FLASH_SIZE "${SELECTOR}" "${IT_MCU_${MCU}_CORE}"
-                                            "${IT_MCU_${MCU}_FLASH_SIZE_ADDRESS}" b16 0xFFFF)
+            IntegrationTesting_ReadRegister(FLASH_SIZE
+                                            "${SELECTOR}"
+                                            "${READ_CHIP}"
+                                            "${IT_MCU_${MCU}_FLASH_SIZE_ADDRESS}"
+                                            b16
+                                            0xFFFF)
             if(FLASH_SIZE)
                 math(EXPR FLASH_SIZE_KB "${FLASH_SIZE}")
             endif()
@@ -439,74 +487,180 @@ endfunction(IntegrationTesting_ListProbes)
 
 
 #------------------------------------------------------------------------------#
-# Finds connected probes of the board - candidates (IT_PROBE, all connected
-# probes if empty) whose MCU has the expected ID (if IT_ID_ADDRESS is set) and
-# flash size (if IT_FLASH_SIZE_ADDRESS is set).
+# Checks whether a connected probe is a candidate probe of the board - every
+# probe without IT_PROBE, otherwise the probes listed in IT_PROBE (probe-rs
+# selectors or serial numbers).
 #
-# MATCHED_VAR   [out]: List of probe-rs selectors of matching probes
-# CONNECTED_VAR [out]: Text with connected probes (and their IDs) for messages
+# CANDIDATE_VAR [out]: TRUE for a candidate probe
+# SELECTOR      [in]:  probe-rs selector of the connected probe
 #------------------------------------------------------------------------------#
-function(IntegrationTesting_FindProbes MATCHED_VAR CONNECTED_VAR)
+function(itProbe_IsCandidate CANDIDATE_VAR SELECTOR)
+
+    set(IS_CANDIDATE FALSE)
+
+    if(NOT IT_PROBE)
+        set(IS_CANDIDATE TRUE)
+    else()
+        foreach(PROBE IN LISTS IT_PROBE)
+            if("${SELECTOR}" STREQUAL "${PROBE}" OR
+               "${SELECTOR}" MATCHES ":${PROBE}$")
+                set(IS_CANDIDATE TRUE)
+            endif()
+        endforeach()
+    endif()
+
+    set(${CANDIDATE_VAR} ${IS_CANDIDATE} PARENT_SCOPE)
+
+endfunction(itProbe_IsCandidate)
+
+#------------------------------------------------------------------------------#
+# Checks the MCU connected to a probe - ID register (IT_ID_ADDRESS) and flash
+# size register (IT_FLASH_SIZE_ADDRESS) read with the chip of the board
+# (IT_CHIP). Without IT_ID_ADDRESS every probe matches.
+#
+# MATCH_VAR [out]: TRUE when the MCU matches
+# TEXT_VAR  [out]: Read values for messages ("ID 0x413", "ID not read", ...)
+# SELECTOR  [in]:  probe-rs selector
+#------------------------------------------------------------------------------#
+function(itProbe_CheckMcu MATCH_VAR TEXT_VAR SELECTOR)
+
+    set(MATCH FALSE)
+    set(TEXT  "")
+
+    if(NOT IT_ID_ADDRESS)
+
+        set(MATCH TRUE)
+        set(TEXT  "MCU not checked")
+
+    else()
+
+        math(EXPR EXPECTED_ID "${IT_ID_VALUE} & ${IT_ID_MASK}" OUTPUT_FORMAT HEXADECIMAL)
+
+        IntegrationTesting_ReadRegister(MCU_ID "${SELECTOR}" "${IT_CHIP}" "${IT_ID_ADDRESS}" b32 "${IT_ID_MASK}")
+
+        set(FLASH_SIZE_KB "")
+        if("${MCU_ID}" STREQUAL "${EXPECTED_ID}" AND
+           IT_FLASH_SIZE_ADDRESS AND
+           IT_FLASH_SIZE_KB)
+            IntegrationTesting_ReadRegister(FLASH_SIZE "${SELECTOR}" "${IT_CHIP}" "${IT_FLASH_SIZE_ADDRESS}" b16 0xFFFF)
+            if(FLASH_SIZE)
+                math(EXPR FLASH_SIZE_KB "${FLASH_SIZE}")
+            endif()
+        endif()
+
+        if(NOT MCU_ID)
+            set(TEXT "ID not read")
+        elseif(NOT "${MCU_ID}" STREQUAL "${EXPECTED_ID}")
+            set(TEXT "ID ${MCU_ID}, expected ${EXPECTED_ID}")
+        elseif(FLASH_SIZE_KB AND
+               NOT FLASH_SIZE_KB EQUAL IT_FLASH_SIZE_KB)
+            set(TEXT "ID ${MCU_ID}, flash ${FLASH_SIZE_KB} KB, expected ${IT_FLASH_SIZE_KB} KB")
+        else()
+            set(TEXT  "ID ${MCU_ID}")
+            set(MATCH TRUE)
+        endif()
+
+    endif()
+
+    set(${MATCH_VAR} ${MATCH} PARENT_SCOPE)
+    set(${TEXT_VAR}  "${TEXT}" PARENT_SCOPE)
+
+endfunction(itProbe_CheckMcu)
+
+#------------------------------------------------------------------------------#
+# Selects and locks the probe of the board (IntegrationTesting_Lock.cmake) -
+# candidates (IT_PROBE, all connected probes if empty) are locked one after the
+# other and the MCU of a locked candidate is checked (itProbe_CheckMcu): the
+# first matching probe stays locked by this process, the other candidates are
+# released. A candidate used by another client (debugging, pipeline job) is not
+# read; when no free candidate matches, the first used candidate is waited for
+# at most WAIT seconds and checked then.
+#
+# SELECTOR_VAR  [out]: Selected probe, locked by this process ("" if none)
+# MATCHED_VAR   [out]: Probes whose MCU matches (the selected one first)
+# CONNECTED_VAR [out]: Text with the connected probes (IDs, holders) for messages
+# USED_BY_VAR   [out]: Holder of the probe still used by another client after the
+#                      wait ("" when no probe was waited for or the wait ended)
+# WAIT          [in]:  Longest wait for a probe used by another client [s]
+# HOLDER        [in]:  Holder of the lock (IntegrationTesting_Get_LockHolder)
+#------------------------------------------------------------------------------#
+function(IntegrationTesting_SelectProbe SELECTOR_VAR MATCHED_VAR CONNECTED_VAR USED_BY_VAR WAIT HOLDER)
 
     IntegrationTesting_ListProbes(CONNECTED_SELECTORS)
 
-    if(IT_ID_ADDRESS)
-        math(EXPR EXPECTED_ID "${IT_ID_VALUE} & ${IT_ID_MASK}" OUTPUT_FORMAT HEXADECIMAL)
-    endif()
-
-    set(MATCHED_SELECTORS "")
-    set(CONNECTED_TEXT    "")
+    set(SELECTED       "")
+    set(MATCHED        "")
+    set(USED           "")
+    set(USED_BY        "")
+    set(CONNECTED_TEXT "")
 
     foreach(SELECTOR IN LISTS CONNECTED_SELECTORS)
 
-        # Candidate: probe-rs selector or serial number listed in IT_PROBE
-        set(IS_CANDIDATE FALSE)
-
-        if(NOT IT_PROBE)
-            set(IS_CANDIDATE TRUE)
-        else()
-            foreach(PROBE IN LISTS IT_PROBE)
-                if(SELECTOR STREQUAL PROBE OR SELECTOR MATCHES ":${PROBE}$")
-                    set(IS_CANDIDATE TRUE)
-                endif()
-            endforeach()
-        endif()
+        itProbe_IsCandidate(IS_CANDIDATE "${SELECTOR}")
 
         if(NOT IS_CANDIDATE)
             string(APPEND CONNECTED_TEXT "\n  ${SELECTOR} (not selected)")
-        elseif(NOT IT_ID_ADDRESS)
-            string(APPEND CONNECTED_TEXT "\n  ${SELECTOR}")
-            list(APPEND MATCHED_SELECTORS "${SELECTOR}")
+            continue()
+        endif()
+
+        IntegrationTesting_LockProbe(LOCK_RESULT "${SELECTOR}" 0 "${HOLDER}")
+
+        if(NOT "${LOCK_RESULT}" STREQUAL "")
+            string(APPEND CONNECTED_TEXT "\n  ${SELECTOR} (used by ${LOCK_RESULT})")
+            list(APPEND USED "${SELECTOR}")
+            continue()
+        endif()
+
+        itProbe_CheckMcu(MCU_MATCH MCU_TEXT "${SELECTOR}")
+        string(APPEND CONNECTED_TEXT "\n  ${SELECTOR} (${MCU_TEXT})")
+
+        if(MCU_MATCH)
+            list(APPEND MATCHED "${SELECTOR}")
+        endif()
+
+        if(MCU_MATCH AND
+           "${SELECTED}" STREQUAL "")
+            set(SELECTED "${SELECTOR}")
         else()
-            IntegrationTesting_ReadRegister(MCU_ID "${SELECTOR}" "${IT_CHIP}" "${IT_ID_ADDRESS}" b32 "${IT_ID_MASK}")
-
-            set(FLASH_SIZE_KB "")
-            if(MCU_ID STREQUAL EXPECTED_ID AND IT_FLASH_SIZE_ADDRESS AND IT_FLASH_SIZE_KB)
-                IntegrationTesting_ReadRegister(FLASH_SIZE "${SELECTOR}" "${IT_CHIP}" "${IT_FLASH_SIZE_ADDRESS}" b16 0xFFFF)
-                if(FLASH_SIZE)
-                    math(EXPR FLASH_SIZE_KB "${FLASH_SIZE}")
-                endif()
-            endif()
-
-            if(NOT MCU_ID)
-                string(APPEND CONNECTED_TEXT "\n  ${SELECTOR} (ID not read)")
-            elseif(NOT MCU_ID STREQUAL EXPECTED_ID)
-                string(APPEND CONNECTED_TEXT "\n  ${SELECTOR} (ID ${MCU_ID}, expected ${EXPECTED_ID})")
-            elseif(FLASH_SIZE_KB AND NOT FLASH_SIZE_KB EQUAL IT_FLASH_SIZE_KB)
-                string(APPEND CONNECTED_TEXT "\n  ${SELECTOR} (ID ${MCU_ID}, flash ${FLASH_SIZE_KB} KB, expected ${IT_FLASH_SIZE_KB} KB)")
-            else()
-                string(APPEND CONNECTED_TEXT "\n  ${SELECTOR} (ID ${MCU_ID})")
-                list(APPEND MATCHED_SELECTORS "${SELECTOR}")
-            endif()
+            IntegrationTesting_UnlockProbe("${SELECTOR}")
         endif()
 
     endforeach()
+
+    # No free probe of the board - the first probe used by another client is waited for
+    if("${SELECTED}" STREQUAL "" AND
+       NOT "${USED}" STREQUAL "")
+
+        list(GET USED 0 SELECTOR)
+
+        IntegrationTesting_LockProbe(LOCK_RESULT "${SELECTOR}" ${WAIT} "${HOLDER}")
+
+        if("${LOCK_RESULT}" STREQUAL "")
+
+            itProbe_CheckMcu(MCU_MATCH MCU_TEXT "${SELECTOR}")
+            string(APPEND CONNECTED_TEXT "\n  ${SELECTOR} after the wait (${MCU_TEXT})")
+
+            if(MCU_MATCH)
+                set(SELECTED "${SELECTOR}")
+                list(APPEND MATCHED "${SELECTOR}")
+            else()
+                IntegrationTesting_UnlockProbe("${SELECTOR}")
+            endif()
+
+        else()
+            string(APPEND CONNECTED_TEXT "\n  ${SELECTOR} still used by ${LOCK_RESULT} after ${WAIT} s")
+            set(USED_BY "${LOCK_RESULT}")
+        endif()
+
+    endif()
 
     if(NOT CONNECTED_SELECTORS)
         set(CONNECTED_TEXT "\n  none")
     endif()
 
-    set(${MATCHED_VAR}   "${MATCHED_SELECTORS}" PARENT_SCOPE)
-    set(${CONNECTED_VAR} "${CONNECTED_TEXT}"    PARENT_SCOPE)
+    set(${SELECTOR_VAR}  "${SELECTED}"       PARENT_SCOPE)
+    set(${MATCHED_VAR}   "${MATCHED}"        PARENT_SCOPE)
+    set(${CONNECTED_VAR} "${CONNECTED_TEXT}" PARENT_SCOPE)
+    set(${USED_BY_VAR}   "${USED_BY}"        PARENT_SCOPE)
 
-endfunction(IntegrationTesting_FindProbes)
+endfunction(IntegrationTesting_SelectProbe)

@@ -173,6 +173,20 @@ enable_testing()
 # Modules register their unit tests only if this flag is ON (see UnitTesting_AddPath)
 set(UNIT_TESTING_AVAILABLE              "ON")
 
+# macOS host: 64-bit processes reserve the lowest 4 GB (__PAGEZERO), where RegMem maps the Cortex-M addresses
+# (0x20000000, 0x40000000, 0xE0000000). Apple Silicon refuses arm64 executables with a smaller __PAGEZERO, so the
+# host targets are built for x86_64 (Rosetta 2 on Apple Silicon, native on Intel Macs) and the test executables
+# are linked with a 64 kB __PAGEZERO (UnitTesting_Add_Test). Set before the first host target.
+if(APPLE)
+    set(UNIT_TEST_OSX_ARCHITECTURE      "x86_64"
+        CACHE STRING                    "macOS architecture of the unit tests (RegMem needs a small __PAGEZERO)")
+    set(UNIT_TEST_OSX_PAGEZERO_SIZE     "0x10000")
+    set(CMAKE_OSX_ARCHITECTURES         "${UNIT_TEST_OSX_ARCHITECTURE}")
+    message(STATUS "Unit tests are built for macOS ${UNIT_TEST_OSX_ARCHITECTURE}.")
+else()
+    # Other hosts map the Cortex-M addresses with the default address space layout
+endif()
+
 # Unity framework
 add_library(unity STATIC ${UNITY_ROOT}/src/unity.c)
 
@@ -497,6 +511,13 @@ function(UnitTesting_Add_Test)
     # runs the test.
     if(MINGW)
         target_link_options(${TEST_TARGET} PRIVATE -static)
+    endif()
+
+    # macOS: __PAGEZERO shrunk, the Cortex-M addresses emulated by RegMem lie in its default 4 GB
+    if(APPLE)
+        target_link_options(${TEST_TARGET} PRIVATE -Wl,-pagezero_size,${UNIT_TEST_OSX_PAGEZERO_SIZE})
+    else()
+        # Default address space layout of the host
     endif()
 
     # Code under test is compiled with warnings (and optionally with coverage)
