@@ -282,20 +282,18 @@ function(IntegrationTesting_AgentCall RESULT_VAR ERROR_VAR TARGET TOOLS OPTIONS)
 
     string(REPLACE "\r" "" SSH_OUTPUT "${SSH_OUTPUT}")
 
-    # The result line (the last one) and the log (the other lines)
+    # The result line and the log (the other lines) - searched in the text, the lines are no list: a line with an
+    # unbalanced '[' (eg. a color code of probe-rs) would join the following lines into one element
     set(RESULT "")
-    set(LOG "")
-    string(REGEX MATCHALL "[^\n]+" OUTPUT_LINES "${SSH_OUTPUT}")
+    set(LOG "${SSH_OUTPUT}")
+    string(REGEX MATCH "(^|\n)${IT_AGENT_RESULT_PREFIX}[^\n]*" RESULT_LINE "${SSH_OUTPUT}")
 
-    foreach(OUTPUT_LINE IN LISTS OUTPUT_LINES)
-        string(FIND "${OUTPUT_LINE}" "${IT_AGENT_RESULT_PREFIX}" PREFIX_POSITION)
-        if(PREFIX_POSITION EQUAL 0)
-            string(LENGTH "${IT_AGENT_RESULT_PREFIX}" PREFIX_LENGTH)
-            string(SUBSTRING "${OUTPUT_LINE}" ${PREFIX_LENGTH} -1 RESULT)
-        else()
-            string(APPEND LOG "${OUTPUT_LINE}\n")
-        endif()
-    endforeach()
+    if(NOT "${RESULT_LINE}" STREQUAL "")
+        string(REPLACE "${RESULT_LINE}" "" LOG "${SSH_OUTPUT}")
+        string(STRIP "${RESULT_LINE}" RESULT_LINE)
+        string(LENGTH "${IT_AGENT_RESULT_PREFIX}" PREFIX_LENGTH)
+        string(SUBSTRING "${RESULT_LINE}" ${PREFIX_LENGTH} -1 RESULT)
+    endif()
 
     set(ERROR "")
 

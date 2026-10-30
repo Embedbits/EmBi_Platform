@@ -265,7 +265,7 @@ name is kept). The name is written to `set(PROJECT_NAME ...)` of the root `CMake
 
 ```
 .vscode/
-├─ tasks.json                    - Build, clean rebuild, flash, unit tests, integration tests, board detection, Setup
+├─ tasks.json                    - Build, clean rebuild, flash, unit tests, integration tests, board detection, serial monitor of a board of an IT agent, Setup
 ├─ launch.json                   - probe-rs debugging (firmware, attach, integration test firmware, picked board of this machine or of an IT agent), unit tests (gdb)
 ├─ settings.json                 - CMake Tools with presets, IntelliSense, excludes (other settings are kept)
 ├─ c_cpp_properties.json         - IntelliSense configuration provided by CMake Tools
@@ -280,10 +280,11 @@ execute `Build_Handler.cmake` - the same flow as the menu options *Build* and *T
 | `EmBi: Build` | Configuration and build of `<MCU>_<Debug/Release>` (default build task) |
 | `EmBi: Clean rebuild` | Configuration without CMake cache (`--fresh`), build `--clean-first` |
 | `EmBi: Build for board` | Build of a picked board (Debug / Release) in its build folder `Build/<MCU>_<type>_<board>` with its configuration (fixture, own defines) |
-| `EmBi: Flash` | Build, flashing by probe-rs to the connected board with the MCU, reset |
+| `EmBi: Flash` | Build of a picked board (its MCU and configuration, as *Build for board*), flashing by probe-rs and reset - a board of this machine under the probe lock, a board of an IT agent through its agent tools (`embi-agent flash`) |
 | `EmBi: Unit tests` | Build of `<MCU>_UnitTest`, execution of a test set (empty = all), summary (default test task) |
 | `EmBi: Integration tests` | Detection of boards (this machine and IT agents of `ItHosts.json`), build and execution on the picked physical board - local or on its IT agent - (or all connected boards), summary |
 | `EmBi: Detect connected boards` | Detection of the boards of this machine and of all IT agents of `ItHosts.json` (`Build/IntegrationTestBoards.json`, read by the board pickers of the other tasks), printed without the numbered list of the menu (`FUNCTION_ID=DETECT_BOARDS`) |
+| `EmBi: Serial monitor on board` | The virtual COM port of a picked board of an IT agent (and the baud rate) on `127.0.0.1:<port>` of this machine for the Serial Monitor in TCP mode, until the task is terminated (below) |
 | `EmBi: Setup` | This menu in the VSCode terminal |
 
 Debug configurations of every selected MCU (debug adapter of the probe-rs extension, `probe-rs dap-server`):
@@ -325,7 +326,22 @@ compares them case sensitively.
 
 probe-rs configurations have RTT enabled - RTT channels of the firmware (SEGGER RTT control block) are shown in the
 terminal of the debug session. Firmware output over ST-LINK VCP (USART) is read by the recommended Serial Monitor
-extension.
+extension - the VCP of a board of this machine is a serial port of this machine, the VCP of a board of an IT agent is
+opened by the task `EmBi: Serial monitor on board`:
+
+1. The task asks for the board (boards of the IT agents, detected now, `PICK_SERIAL_BOARD`) and the baud rate and starts
+   the serial server of the agent tools (`embi-agent serial-server`, see `IntegrationTesting/README.md`, *IT agent
+   interface*) behind `ssh -tt -L <port>:127.0.0.1:<port of the agent>` (`SERIAL_SERVE`). It prints the port:
+   `EmBi: Serial Monitor - Monitor Mode TCP, Host 127.0.0.1, Port <port>, Start Monitoring`.
+2. In the Serial Monitor panel: *Monitor Mode* `TCP`, *Host* `127.0.0.1`, *Port* `<port>`, *Start Monitoring*. The
+   output of the board is shown, a sent text goes to the board. Stop / start of the monitor reconnects (one client at
+   a time); the output of the board without a connected monitor is dropped.
+3. The probe is not locked - the board is debugged (`EmBi: Debug on board`) and tested while the monitor is open. One
+   serial monitor per board: a second one (another machine) ends with the holder of the first one.
+4. Terminating the task closes the port: the SSH connection ends and the serial server of the agent with it.
+
+The ports are given by the board (`127.0.0.1:20000-29999` of this machine without the excluded port ranges of
+Windows, `50000-59999` of the agent), so the Serial Monitor keeps the port of a board.
 
 The probe is not written to `launch.json` (it is selected by the debug adapter). `launch.json` contains no path of
 probe-rs: the probe-rs configurations start the debug adapter through CMake (`"runtimeExecutable": "cmake"`,
@@ -342,16 +358,17 @@ the task or the debug configuration is started (extension *Tasks Shell Input*, `
 | Function (`-DFUNCTION_ID=`) | Used by | Output |
 |-----------------------------|---------|--------|
 | `PICK_MCU` | tasks | MCUs of the project presets |
-| `PICK_BOARD` | tasks | connected boards of this machine and of the IT agents (detected now, one option per physical board, value = ID `<board>@<host>:<probe>`), all connected boards |
+| `PICK_BOARD` | tasks | connected boards of this machine and of the IT agents (detected now, one option per physical board, value = ID `<board>@<host>:<probe>`), all connected boards; no board: no option, the error of the input names the IT agents whose detection failed (`failed` of `Build/IntegrationTestBoards.json`) - also of `PICK_DEBUG_BOARD` and `PICK_SERIAL_BOARD` |
 | `PICK_TEST_SET` (`-DTEST_TYPE=UT/IT`) | tasks | test sets = names of the tests registered in the project (the first option = all) |
 | `DEBUG_CHIP` (`-DMCU=`) | debug | probe-rs chip: board chip of `ItBoards.json`, device of the MCU identification of `Bsp/Ral/RalPresets.json` or the MCU name (the first one probe-rs knows if the artifact is in the cache, otherwise the first defined) |
 | `DEBUG_SVD` (`-DMCU=`) | debug | SVD file of the MCU (peripheral registers of the debugger, `coreConfigs[].svdFile`) from the Ral module `Svd` of the BSP (`Bsp/Ral/Svd/<Device>.svd`): the file `Bsp/Ral/Svd/Devices.csv` (`Device;Core;File;Pack`, generated by the importer from the pack descriptions of ST) assigns the file to a device, the device is the one of the MCU identification of `Bsp/Ral/RalPresets.json`, otherwise the first device whose name matches the MCU (`x` of the MCU name = any character). No file of the host is used. An MCU without an SVD file (BSP without the module `Svd`, a device ST delivers no SVD file for) prints the expected path with a warning, the debugger runs without the peripheral registers. The row of the core 0 is used (a multi core device, e.g. STM32H745, has a row per core, ordered by the access port) |
 | `DEBUG_FIRMWARE` (`-DMCU=`) | debug | firmware file: build directory of the preset and the firmware name of the root `CMakeLists.txt` (the same file the flash task uses) |
 | `DEBUG_TESTS` (`-DTEST_TYPE=UT/IT -DMCU=`) | debug | test executables of the MCU registered in the project (`Build/<MCU>_<UnitTest|IntegrationTest>`; unit tests need the build of the task *Unit tests*) |
 | `DEBUG_GDB` (`-DMCU=`) | debug | host gdb of the artifact `gdb`, otherwise `gcc`, in the version configured for the unit test preset of the MCU; gdb of the system is not used |
-| `PICK_DEBUG_BOARD` | debug | connected boards of this machine and of the IT agents (detected now): `<ID>\|<board> - <name>\|<host>`, ID `<board>@<host>:<probe>` |
+| `PICK_DEBUG_BOARD` | debug, tasks | connected boards of this machine and of the IT agents (detected now): `<ID>\|<board> - <name>\|<host>`, ID `<board>@<host>:<probe>` (inputs `debugBoard`, `buildBoard`, `flashBoard`) |
 | `DEBUG_BOARD_SERVER` (`-DTARGET=<ID>`) | debug | `127.0.0.1:<port>` of the debug server of the picked board; writes `Build/DebugTarget.cmake` (the board for the `preLaunchTask`) |
 | `DEBUG_BOARD_PROBE`, `_CHIP`, `_SVD`, `_FIRMWARE`, `_TESTS` (`-DTARGET=<ID>`) | debug | probe of the picked board, chip / SVD file / Debug firmware of the board / integration test firmwares of its MCU (as `DEBUG_CHIP`, `DEBUG_SVD`, `DEBUG_FIRMWARE`, `DEBUG_TESTS`) |
+| `PICK_SERIAL_BOARD` | tasks | connected boards of the IT agents (detected now, as `PICK_DEBUG_BOARD` without the boards of this machine) |
 
 The generated configuration uses VSCode extensions (CMake Tools, C/C++, probe-rs Debugger, Serial Monitor and
 *Tasks Shell Input*, without which the tasks and debug configurations with inputs do not start - `shellCommand.execute not

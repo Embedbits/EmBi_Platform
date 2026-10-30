@@ -167,6 +167,8 @@ the board behind the probe (`label`): the fixture of the probe ([Board fixtures]
 its `boards.conf`, otherwise the end of the serial number. A run of one target gives its probe
 (`INTEGRATION_TEST_PROBE`), so it uses exactly one physical board. A probe used by another client
 ([Probe lock](#probe-lock)) is not read - its target of the previous detection stays listed with `usedBy`.
+An IT agent whose detection failed (not reachable, agent tools not installed) is listed in `failed` (host, SSH
+target, error) - the board inputs of VS Code show it when they list no board.
 
 **Two boards of one MCU** are two targets of one board. When the probes of such a board are not defined in
 `ItBoards.json`, the board is marked `"ambiguous"`: the boards may have a different wiring, so
@@ -289,6 +291,12 @@ boards are not listed.
   configuration of the agent (the inventory of the pipeline).
 - **Debugging** (`embi-agent debug-server`, VS Code `EmBi: Debug on board`): the debug server of the agent behind
   `ssh -tt -L <port of this machine>:127.0.0.1:<port of the agent>`.
+- **Serial monitor** (`embi-agent serial-server`, VS Code task `EmBi: Serial monitor on board`): the virtual COM port
+  of the ST-LINK of the board on `127.0.0.1:<port of this machine>` (the same tunnel) - the Serial Monitor of VS Code
+  connects there in TCP mode. The probe is not locked: the board is debugged and tested meanwhile.
+- **Flash** (`embi-agent flash`, VS Code task `EmBi: Flash`): the build of the picked board is copied into a folder of
+  the agent (`new-package`), flashed there (probe lock and probe-rs of the agent) and the folder is removed
+  (`remove-package`).
 - **Integration tests on a board of an IT agent** are built here and executed there: the preset is configured with
   `INTEGRATION_TEST_HOST=<name of ItHosts.json>` (and the probe of the target, `INTEGRATION_TEST_PROBE`), every
   `<Name>.Run` packs its test set ([Test package](#test-package), label `<Name>`), copies it into a folder of the agent
@@ -311,25 +319,27 @@ ctest --preset STM32H503xB_IntegrationTest -L Gpio
 This machine talks to an IT agent **only** through `embi-agent` - the tools of the agent, installed on the agent
 from EmBi_Tester by a pipeline (`~/_tools/embi` of the pipeline user, with the identification of the MCUs of all
 families and the configuration of the boards of the agent). Nothing of this machine is copied to the agent and
-executed there; the only data an operation sends are the firmware of a debug session (probe-rs protocol) and a test
-package (`run-it`). The interface is defined here, the agent implements it.
+executed there; the only data an operation sends are the firmware of a debug session (probe-rs protocol), a test
+package (`run-it`) and a firmware to flash (`flash`). The interface is defined here, the agent implements it.
 
 | Item | Definition |
 |---|---|
 | Version | `IT_AGENT_INTERFACE_VERSION` = **1** (`IntegrationTesting_Remote.cmake`). Every result carries `"interface"`; this machine refuses another version with an error naming both (update the agent tools or the platform). |
 | Call | `ssh <target> sh -c '<locator>' embi-agent <command> [--<option> <value>]...` - `<locator>` runs `tools` of the host in `ItHosts.json` (absolute path of `embi-agent` on the agent), otherwise the first executable `$HOME/_tools/embi/embi-agent` or `/home/*/_tools/embi/embi-agent`; none: exit code 127, `embi-agent is not installed on this IT agent`. |
-| Result | One line `EMBI-AGENT <JSON>` on the standard output (compact JSON on one line, `IT_AGENT_RESULT_PREFIX`); every other line is a log for people. Exit code 0 = done; otherwise the result has `"error": "<text>"` when the command got so far. `debug-server` has no result line. |
+| Result | One line `EMBI-AGENT <JSON>` on the standard output (compact JSON on one line, `IT_AGENT_RESULT_PREFIX`); every other line is a log for people. Exit code 0 = done; otherwise the result has `"error": "<text>"` when the command got so far. `debug-server` and `serial-server` have no result line when they start their server. |
 | Cleanup | Every command removes the folders of earlier operations older than 24 hours (`/tmp/embi-it-*`, `/tmp/embi-dap-*`) - left by a terminated task or a broken connection. |
-| Probe lock | The agent takes the lock of a probe ([Probe lock](#probe-lock)) for every operation on it; `--holder` is the holder written for the developer machine (`<login>@<computer> (<purpose>)`). |
+| Probe lock | The agent takes the lock of a probe ([Probe lock](#probe-lock)) for every operation on it; `--holder` is the holder written for the developer machine (`<login>@<computer> (<purpose>)`). `serial-server` is no operation on the probe: it takes the lock of the virtual COM port of the probe only (`serial-<key>.lock` / `.holder` in the folder of the probe locks, the same protocol), so the board is debugged and tested while its output is monitored. |
 
 | Command | Options | Result / behavior |
 |---|---|---|
 | `version` | - | `{"interface": 1, "tools": "<commit of EmBi_Tester>", "host": "<host name>"}` |
 | `detect` | [`--probe-rs <version>`] [`--holder <text>`] | `{"interface": 1, "host": "<host name>", "probes": [ <probe> ... ], "config": <configuration>}` - the connected probes and the board configuration of the agent; probe-rs of the version (default: the newest one of the agent), the holder of the lock while a probe is read. |
 | `debug-server` | `--probe <VID:PID:SN>` `--port <port>` `--probe-rs <version>` `--holder <text>` | probe-rs `dap-server` of the probe on the port of 127.0.0.1 of the agent for one session (this machine forwards the port, `ssh -L`), under the probe lock; prints `EmBi: debug server listening on port <port>` when it listens and ends with the session or the connection. probe-rs of the given version (the version of this machine) is installed on the agent when it is missing. |
+| `serial-server` | `--probe <VID:PID:SN>` `--port <port>` `--holder <text>` [`--baud <rate>`] | The virtual COM port of the probe (`/dev/serial/by-id/*_<serial number>-if<interface>`, the first one of a probe with two) on the port of 127.0.0.1 of the agent (this machine forwards the port, `ssh -L`, and the Serial Monitor of VS Code connects to it in TCP mode): raw, 8N1, no flow control, `--baud` (default 115200). One client at a time, the next one after a disconnect; the output of the board without a client is dropped. One serial monitor per probe - a second one ends with the holder of the first one (the same holder waits for its previous session as `debug-server`). Prints `EmBi: serial server listening on port <port>` when it listens and ends with the connection or when the virtual COM port is gone. Added to version 1 (the other commands are unchanged); agent tools without it answer `Unknown command`. |
 | `new-package` | - | `{"interface": 1, "dir": "/tmp/embi-it-<random>"}` - an empty folder of the agent for a test package (copied there by `scp`). |
 | `run-it` | `--package <dir>` `--probe <VID:PID:SN>` `--holder <text>` [`--label <ctest label regex>`] [`--lock-wait <s>`] | Runs the test package ([Test package](#test-package)) on the probe (`ItRun.cmake` of the agent): `{"interface": 1, "result": <exit code of ctest>, "notConnected": <true when no probe reads the MCU of the package>, "junit": "<dir>/IntegrationTestResults.xml"}`; the logs are in `<dir>/logs`, the coverage data in `<dir>/coverage/dumps`. |
 | `remove-package` | `--package <dir>` | Removes the folder of `new-package` (only `/tmp/embi-it-*`): `{"interface": 1}`. |
+| `flash` | `--package <dir>` `--firmware <file>` `--probe <VID:PID:SN>` `--chip <probe-rs chip>` `--probe-rs <version>` `--holder <text>` [`--lock-wait <s>`] | Flashes the firmware `<dir>/<file>` (copied into the folder of `new-package` by `scp`) to the probe (`probe-rs download`) and resets the MCU, under the probe lock: `{"interface": 1}`. A probe used by another client is waited for `--lock-wait` seconds at most (default 30), then the command fails with its holder. probe-rs of the given version is installed on the agent when it is missing. Added to version 1 (the other commands are unchanged); agent tools without it answer `Unknown command`. |
 
 `<probe>` of `detect`:
 

@@ -52,7 +52,8 @@
 #     "targets": [ { "board": "...", "probe": "<VID:PID:SN>", "host": "local" | "<IT host>",
 #                    "target": "<user>@<host>", "label": "<name of the board>",
 #                    "usedBy": "<holder>" } ],
-#     "used":    [ { "probe": "...", "host": "...", "target": "...", "usedBy": "<holder>" } ] }
+#     "used":    [ { "probe": "...", "host": "...", "target": "...", "usedBy": "<holder>" } ],
+#     "failed":  [ { "host": "<IT host>", "target": "<user>@<host>", "error": "<why>" } ] }
 #   - a target is one physical board (one probe): ID <board>@<host>:<probe> selects it
 #     (IntegrationTesting_ReadTargets, IntegrationTesting_FindTarget)
 #   - "ambiguous": more probes of one MCU without the probes of the board in the
@@ -60,6 +61,8 @@
 #     selects one probe (two wirings = two board names in ItBoards.json)
 #   - a probe used by another client keeps its target of the previous detection
 #     with "usedBy"
+#   - "failed": the IT agents whose boards are not listed (agent not reachable,
+#     agent tools not installed) - only when there is one
 #
 # Optional parameters:
 #   IT_MCU_PRESETS_FILE  - MCU identification (default Bsp/Ral/RalPresets.json)
@@ -935,6 +938,7 @@ endfunction(itDetect_UpdateRemoteBoards)
 # this project (IntegrationTesting_DetectBoards).
 #
 # BOARDS_JSON_VAR  [out]: Boards file of the agent ("" if the detection failed - reported)
+# ERROR_VAR        [out]: Why the detection failed ("" = done)
 # PROJECT_DIR      [in]:  Project root folder
 # MCU_PRESETS_FILE [in]:  Ral presets with MCU identification
 # OVERRIDE_FILE    [in]:  Boards file of the project (may not exist)
@@ -942,7 +946,14 @@ endfunction(itDetect_UpdateRemoteBoards)
 # HOST             [in]:  Name of the host (IntegrationTesting_ReadItHosts)
 # PROBE_RS_VERSION [in]:  Version of probe-rs of this machine
 #------------------------------------------------------------------------------#
-function(itDetect_DetectHost BOARDS_JSON_VAR PROJECT_DIR MCU_PRESETS_FILE OVERRIDE_FILE WORK_DIR HOST PROBE_RS_VERSION)
+function(itDetect_DetectHost BOARDS_JSON_VAR
+                             ERROR_VAR
+                             PROJECT_DIR
+                             MCU_PRESETS_FILE
+                             OVERRIDE_FILE
+                             WORK_DIR
+                             HOST
+                             PROBE_RS_VERSION)
 
     set(TARGET    "${IT_HOST_${HOST}_TARGET}")
     set(HOST_FILE "${WORK_DIR}/IntegrationTestBoards_${HOST}.json")
@@ -981,6 +992,7 @@ function(itDetect_DetectHost BOARDS_JSON_VAR PROJECT_DIR MCU_PRESETS_FILE OVERRI
     endif()
 
     set(${BOARDS_JSON_VAR} "${BOARDS_JSON}" PARENT_SCOPE)
+    set(${ERROR_VAR}       "${AGENT_ERROR}" PARENT_SCOPE)
 
 endfunction(itDetect_DetectHost)
 
@@ -1158,6 +1170,8 @@ endfunction(itDetect_KeepUsedTargets)
 #            label (name of the board behind the probe), usedBy (the probe is
 #            used by another client, target of the previous detection)
 #   used     probes used by another client (not read)
+#   failed   IT agents whose detection failed: host, target, error (only when
+#            there is one)
 #
 # PROJECT_DIR      [in]: Project root folder (CMakePresets.json, ItHosts.json)
 # MCU_PRESETS_FILE [in]: Ral presets with MCU identification
@@ -1193,8 +1207,11 @@ function(IntegrationTesting_DetectAllBoards PROJECT_DIR MCU_PRESETS_FILE OVERRID
         IntegrationTesting_ProvideProbeRs(LOCAL_PROBE_RS "${PROJECT_DIR}")
         IntegrationTesting_Get_ProbeRsVersion(PROBE_RS_VERSION "${LOCAL_PROBE_RS}")
 
+        set(FAILED_HOSTS "")
+
         foreach(HOST IN LISTS HOSTS)
             itDetect_DetectHost(HOST_JSON
+                                HOST_ERROR
                                 "${PROJECT_DIR}"
                                 "${MCU_PRESETS_FILE}"
                                 "${OVERRIDE_FILE}"
@@ -1204,11 +1221,25 @@ function(IntegrationTesting_DetectAllBoards PROJECT_DIR MCU_PRESETS_FILE OVERRID
             if(NOT "${HOST_JSON}" STREQUAL "")
                 itDetect_MergeHost(MERGED_JSON "${HOST_JSON}" "${HOST}" "${IT_HOST_${HOST}_TARGET}")
             endif()
+            if(NOT "${HOST_ERROR}" STREQUAL "")
+                # One line (the log of ssh in the error)
+                string(REGEX REPLACE "[\r\n\t]+" " " HOST_ERROR "${HOST_ERROR}")
+                IntegrationTesting_JsonString(HOST_NAME_JSON "${HOST}")
+                IntegrationTesting_JsonString(HOST_TARGET_JSON "${IT_HOST_${HOST}_TARGET}")
+                IntegrationTesting_JsonString(HOST_ERROR_JSON "${HOST_ERROR}")
+                list(APPEND FAILED_HOSTS
+                     "{ \"host\": ${HOST_NAME_JSON}, \"target\": ${HOST_TARGET_JSON}, \"error\": ${HOST_ERROR_JSON} }")
+            endif()
         endforeach()
 
     endif()
 
     itDetect_KeepUsedTargets(MERGED_JSON "${PREVIOUS_JSON}")
+
+    # The IT agents whose boards are not listed - the inputs of VS Code report them
+    foreach(FAILED_HOST IN LISTS FAILED_HOSTS)
+        itDetect_JsonAppend(MERGED_JSON failed "${FAILED_HOST}")
+    endforeach()
 
     file(WRITE "${OUT_FILE}" "${MERGED_JSON}\n")
 

@@ -10,6 +10,7 @@
 # └── .vscode
 #     ├── tasks.json                (Build, clean rebuild, flash, unit tests,
 #     │                              integration tests, detection of boards,
+#     │                              serial monitor of a board of an IT agent,
 #     │                              Setup)
 #     ├── launch.json               (probe-rs debugging of the MCU firmware and
 #     │                              integration test firmwares, gdb debugging
@@ -55,6 +56,9 @@ include("${CMAKE_CURRENT_LIST_DIR}/../../IntegrationTesting/IntegrationTesting_P
 # Connected boards of this machine and of the IT agents (targets of the debug configurations of a picked board)
 include("${CMAKE_CURRENT_LIST_DIR}/../../IntegrationTesting/IntegrationTesting_Detect.cmake")
 
+# Listening ports of this machine (the tunnel of the serial monitor of a board of an IT agent)
+include("${CMAKE_CURRENT_LIST_DIR}/../../IntegrationTesting/IntegrationTesting_DebugServer.cmake")
+
 #==============================================================================#
 # Global variables
 #==============================================================================#
@@ -94,6 +98,13 @@ set(VSCODE_DEBUG_TARGET_FILE    "${PROJECT_ROOT_PATH}/Build/DebugTarget.cmake")
 set(VSCODE_DEBUG_LOCAL_PORT_BASE  30000)
 set(VSCODE_DEBUG_REMOTE_PORT_BASE 40000)
 set(VSCODE_DEBUG_PORT_RANGE       10000)
+
+# Serial monitor of a board of an IT agent (task, embi-agent serial-server): ports of its tunnel - 127.0.0.1 of this
+# machine (the Serial Monitor connects there in TCP mode) and of the agent, the range as for the debug server - and
+# the baud rates of the input (the first one is the default)
+set(VSCODE_SERIAL_LOCAL_PORT_BASE  20000)
+set(VSCODE_SERIAL_REMOTE_PORT_BASE 50000)
+set(VSCODE_SERIAL_BAUD_RATES       115200 9600 19200 38400 57600 230400 460800 921600)
 file(RELATIVE_PATH VSCODE_SETUP_DIR "${PROJECT_ROOT_PATH}" "${CMAKE_CURRENT_LIST_DIR}/../../..")
 
 # Ral presets with MCU identification
@@ -504,23 +515,6 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
-# Function: Prj_VSCode_GetProbe
-# Description: Probe of the MCU - the first probe of the first connected board
-#              with the MCU (Build/IntegrationTestBoards.json of the last
-#              detection).
-#
-# IN_MCU    [in]:  MCU.
-# OUT_PROBE [out]: probe-rs selector VID:PID[:SN] ("" if no board is connected).
-# ------------------------------------------------------------------------------
-function(Prj_VSCode_GetProbe IN_MCU OUT_PROBE)
-
-    Prj_VSCode_GetBoardValue("${BUILD_HANDLER_BOARDS_FILE}" "${IN_MCU}" PROBE probes 0)
-
-    set(${OUT_PROBE} "${PROBE}" PARENT_SCOPE)
-endfunction()
-
-
-# ------------------------------------------------------------------------------
 # Function: Prj_VSCode_GetSvd
 # Description: SVD file of the MCU from the Ral module Svd of the BSP
 #              (VSCODE_SVD_DIR). The file Devices.csv of the module (Device;Core;File;Pack,
@@ -679,10 +673,16 @@ function(Prj_VSCode_GenerateTasks IN_MCU_LIST IN_DEBUG_MCU_LIST)
                          "-DBOARD=\${input:buildBoard}"
                          ${TYPE_ARG})
 
-    Prj_VSCode_CmakeTask(FLASH_TASK "EmBi: Flash"
-                         "Build the project for the selected MCU and build type, flash it by probe-rs and reset the MCU"
-                         "" FALSE "${VSCODE_HANDLER}"
-                         -DFUNCTION_ID=FLASH ${MCU_ARG} ${TYPE_ARG})
+    # The MCU and the build of the picked board (this machine or IT agent) - the same build as its debugging
+    Prj_VSCode_CmakeTask(FLASH_TASK
+                         "EmBi: Flash"
+                         "Build for a picked board (its MCU and configuration), flash it by probe-rs and reset the MCU"
+                         ""
+                         FALSE
+                         "${VSCODE_HANDLER}"
+                         -DFUNCTION_ID=FLASH
+                         "-DTARGET=\${input:flashBoard}"
+                         ${TYPE_ARG})
 
     Prj_VSCode_CmakeTask(UT_TASK "EmBi: Unit tests"
                          "Build unit tests of the selected MCU (host) and execute the selected test set"
@@ -699,6 +699,18 @@ function(Prj_VSCode_GenerateTasks IN_MCU_LIST IN_DEBUG_MCU_LIST)
                          "" FALSE "${VSCODE_BUILD_HANDLER}"
                          -DFUNCTION_ID=DETECT_BOARDS)
 
+    # The virtual COM port of a board of an IT agent on 127.0.0.1 of this machine - the Serial Monitor connects there
+    # in TCP mode, the task runs until it is terminated
+    Prj_VSCode_CmakeTask(SERIAL_TASK
+                         "EmBi: Serial monitor on board"
+                         "Open the virtual COM port of a board of an IT agent for the Serial Monitor (TCP mode)"
+                         ""
+                         FALSE
+                         "${VSCODE_HANDLER}"
+                         -DFUNCTION_ID=SERIAL_SERVE
+                         "-DTARGET=\${input:serialBoard}"
+                         "-DBAUD=\${input:serialBaud}")
+
     # Setup menu in the terminal
     Prj_VSCode_JsonString(SETUP_SH "bash ${VSCODE_SETUP_DIR}/Setup.sh")
     file(TO_NATIVE_PATH "${VSCODE_SETUP_DIR}/Setup.bat" SETUP_BAT_PATH)
@@ -711,7 +723,7 @@ function(Prj_VSCode_GenerateTasks IN_MCU_LIST IN_DEBUG_MCU_LIST)
                           presentation "{ \"focus\": true, \"panel\": \"dedicated\" }" problemMatcher "[]")
 
     set(TASKS "${BUILD_TASK}" "${REBUILD_TASK}" "${BOARD_BUILD_TASK}" "${FLASH_TASK}" "${UT_TASK}" "${IT_TASK}"
-              "${DETECT_TASK}" "${SETUP_TASK}")
+              "${DETECT_TASK}" "${SERIAL_TASK}" "${SETUP_TASK}")
 
     # Build of the debug firmware and probe-rs before debugging (preLaunchTask) - probe-rs of the
     # version configured for the integration test preset of the MCU, downloaded by the artifacts
@@ -746,18 +758,33 @@ function(Prj_VSCode_GenerateTasks IN_MCU_LIST IN_DEBUG_MCU_LIST)
     Prj_VSCode_PickInput(TYPE_INPUT buildType "Build type" Debug Debug Release)
     Prj_VSCode_ShellInput(BOARD_INPUT itBoard "Board of the integration tests" FALSE -DFUNCTION_ID=PICK_BOARD)
     Prj_VSCode_ShellInput(BUILD_BOARD_INPUT buildBoard "Board of the build" FALSE -DFUNCTION_ID=PICK_DEBUG_BOARD)
+    Prj_VSCode_ShellInput(FLASH_BOARD_INPUT flashBoard "Board to flash" FALSE -DFUNCTION_ID=PICK_DEBUG_BOARD)
     Prj_VSCode_ShellInput(UT_SET_INPUT utTestSet "Test set of the unit tests" FALSE
                           -DFUNCTION_ID=PICK_TEST_SET -DTEST_TYPE=UT)
     Prj_VSCode_ShellInput(IT_SET_INPUT itTestSet "Test set of the integration tests" FALSE
                           -DFUNCTION_ID=PICK_TEST_SET -DTEST_TYPE=IT)
+    Prj_VSCode_ShellInput(SERIAL_BOARD_INPUT
+                          serialBoard
+                          "Board of an IT agent for the serial monitor"
+                          FALSE
+                          -DFUNCTION_ID=PICK_SERIAL_BOARD)
+    list(GET VSCODE_SERIAL_BAUD_RATES 0 SERIAL_BAUD_DEFAULT)
+    Prj_VSCode_PickInput(SERIAL_BAUD_INPUT
+                         serialBaud
+                         "Baud rate of the virtual COM port"
+                         ${SERIAL_BAUD_DEFAULT}
+                         ${VSCODE_SERIAL_BAUD_RATES})
 
     Prj_VSCode_JsonArray(INPUTS
                          "${MCU_INPUT}"
                          "${TYPE_INPUT}"
                          "${BOARD_INPUT}"
                          "${BUILD_BOARD_INPUT}"
+                         "${FLASH_BOARD_INPUT}"
                          "${UT_SET_INPUT}"
-                         "${IT_SET_INPUT}")
+                         "${IT_SET_INPUT}"
+                         "${SERIAL_BOARD_INPUT}"
+                         "${SERIAL_BAUD_INPUT}")
 
     Prj_VSCode_JsonObject(CONTENT version "\"2.0.0\"" options "{ \"cwd\": \"\${workspaceFolder}\" }"
                           presentation "{ \"panel\": \"dedicated\", \"clear\": true }"
@@ -1365,48 +1392,154 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
-# Function: Prj_VSCode_Flash
-# Description: Builds the project for the MCU, flashes the firmware by probe-rs
-#              to the connected board with the MCU and resets the MCU (task
-#              Flash).
+# Function: Prj_VSCode_FlashRemote
+# Description: Flashes a firmware to the board of an IT agent through its agent tools (IT agent interface):
+#              the firmware is copied into a folder of the agent (new-package), flashed by embi-agent flash
+#              (probe-rs of the version of this machine, probe lock of the agent) and the folder is removed
+#              (remove-package).
 #
-# IN_MCU        [in]: MCU.
-# IN_BUILD_TYPE [in]: Debug or Release.
+# IN_IDX      [in]: Index of the target (Prj_VSCode_GetTarget).
+# IN_FIRMWARE [in]: Firmware file.
+# IN_CHIP     [in]: probe-rs chip.
+# IN_HOLDER   [in]: Holder of the probe lock.
 # ------------------------------------------------------------------------------
-function(Prj_VSCode_Flash IN_MCU IN_BUILD_TYPE)
+function(Prj_VSCode_FlashRemote IN_IDX IN_FIRMWARE IN_CHIP IN_HOLDER)
 
-    Build_Handler_GetMcuList(MCU_LIST)
-    Build_Handler_GetListId("${MCU_LIST}" "${IN_MCU}" "MCU" MCU_ID)
-    Build_Handler_Build(${MCU_ID} "${IN_BUILD_TYPE}")
+    set(HOST       "${IT_TARGET_${IN_IDX}_HOST}")
+    set(SSH_TARGET "${IT_TARGET_${IN_IDX}_TARGET}")
+    set(TEXT       "${IT_TARGET_${IN_IDX}_TEXT}")
 
-    # probe-rs artifact in the version configured for the integration test preset of the MCU - found in
-    # the artifacts cache or downloaded by the artifacts handler
-    IntegrationTesting_ProvideProbeRs(VSCODE_PROBE_RS "${PROJECT_ROOT_PATH}" "${IN_MCU}")
+    IntegrationTesting_ReadItHosts(HOSTS "${PROJECT_ROOT_PATH}")
+    set(TOOLS "${IT_HOST_${HOST}_TOOLS}")
 
-    IntegrationTesting_ReadMcuIdentification(IDENTIFIED_MCUS "${VSCODE_RAL_PRESETS_FILE}")
-    Prj_VSCode_GetChip(${IN_MCU} CHIP)
+    IntegrationTesting_Get_ProbeRsVersion(PROBE_RS_VERSION "${VSCODE_PROBE_RS}")
 
-    # Probe of the connected board with the MCU
-    Build_Handler_DetectBoards()
-    Prj_VSCode_GetProbe(${IN_MCU} PROBE)
+    IntegrationTesting_AgentCall(NEW_JSON NEW_ERROR "${SSH_TARGET}" "${TOOLS}" "" new-package)
 
-    if(NOT PROBE)
-        message(FATAL_ERROR "No connected board with MCU ${IN_MCU} detected.")
+    if(NOT "${NEW_ERROR}" STREQUAL "")
+        message(FATAL_ERROR "Flash of ${TEXT} failed: ${NEW_ERROR}.")
     endif()
 
+    string(JSON REMOTE_DIR GET "${NEW_JSON}" dir)
+
+    if(NOT "${REMOTE_DIR}" MATCHES "${IT_AGENT_PACKAGE_PATTERN}")
+        message(FATAL_ERROR "The IT agent ${HOST} gave the package folder '${REMOTE_DIR}'.")
+    endif()
+
+    # The firmware alone in a folder - the content of the folder is copied
+    get_filename_component(FIRMWARE_NAME "${IN_FIRMWARE}" NAME)
+    get_filename_component(FIRMWARE_DIR "${IN_FIRMWARE}" DIRECTORY)
+    set(PACKAGE_DIR "${FIRMWARE_DIR}/FlashPackage")
+    file(REMOVE_RECURSE "${PACKAGE_DIR}")
+    file(COPY "${IN_FIRMWARE}" DESTINATION "${PACKAGE_DIR}")
+
+    IntegrationTesting_RemotePut(PUT_RESULT "${SSH_TARGET}" "${PACKAGE_DIR}" "${REMOTE_DIR}")
+    file(REMOVE_RECURSE "${PACKAGE_DIR}")
+
+    set(FLASH_ERROR "the firmware could not be copied to the agent")
+
+    if(PUT_RESULT EQUAL 0)
+        IntegrationTesting_AgentCall(FLASH_JSON
+                                     FLASH_ERROR
+                                     "${SSH_TARGET}"
+                                     "${TOOLS}"
+                                     "TTY;PRINT"
+                                     flash
+                                     --package
+                                     "${REMOTE_DIR}"
+                                     --firmware
+                                     "${FIRMWARE_NAME}"
+                                     --probe
+                                     "${IT_TARGET_${IN_IDX}_PROBE}"
+                                     --chip
+                                     "${IN_CHIP}"
+                                     --probe-rs
+                                     "${PROBE_RS_VERSION}"
+                                     --holder
+                                     "${IN_HOLDER}")
+    endif()
+
+    IntegrationTesting_AgentCall(REMOVE_JSON
+                                 REMOVE_ERROR
+                                 "${SSH_TARGET}"
+                                 "${TOOLS}"
+                                 ""
+                                 remove-package
+                                 --package
+                                 "${REMOTE_DIR}")
+
+    # Agent tools older than this platform
+    if("${FLASH_ERROR}" MATCHES "^Unknown command")
+        string(APPEND FLASH_ERROR " - the agent tools of ${HOST} are older than this platform, the pipeline "
+                                  "ItAgentUpdate of EmBi_Tester updates them")
+    endif()
+
+    if(NOT "${FLASH_ERROR}" STREQUAL "")
+        message(FATAL_ERROR "Flash of ${TEXT} failed: ${FLASH_ERROR}")
+    endif()
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Prj_VSCode_Flash
+# Description: Task "EmBi: Flash" - builds the project for the picked board (the preset of its MCU with the
+#              configuration of the board in its build folder - the build of its debugging), flashes the
+#              firmware by probe-rs to the board and resets its MCU. A board of this machine is flashed by
+#              probe-rs of this machine under the probe lock, a board of an IT agent by its agent tools
+#              (Prj_VSCode_FlashRemote).
+#
+# IN_ID         [in]: ID of the picked board.
+# IN_BUILD_TYPE [in]: Debug or Release.
+# ------------------------------------------------------------------------------
+function(Prj_VSCode_Flash IN_ID IN_BUILD_TYPE)
+
+    Prj_VSCode_GetTarget("${IN_ID}" TARGET_IDX)
+
+    set(MCU   "${IT_TARGET_${TARGET_IDX}_MCU}")
+    set(BOARD "${IT_TARGET_${TARGET_IDX}_BOARD}")
+    set(TEXT  "${IT_TARGET_${TARGET_IDX}_TEXT}")
+
+    Build_Handler_BuildBoard("${BOARD}" "${IN_BUILD_TYPE}")
+    Build_Handler_Get_BoardBuild("${BOARD}" "${IN_BUILD_TYPE}" BOARD_MCU BOARD_PRESET BOARD_DIR)
     Prj_VSCode_GetFirmwareName(${IN_BUILD_TYPE} FIRMWARE)
-    set(FIRMWARE_PATH "${BUILD_HANDLER_BUILD_DIR}/${IN_MCU}_${IN_BUILD_TYPE}/${FIRMWARE}")
+    set(FIRMWARE_PATH "${BOARD_DIR}/${FIRMWARE}")
+
+    # probe-rs artifact in the version configured for the integration test preset of the MCU - found in
+    # the artifacts cache or downloaded by the artifacts handler (an IT agent uses the same version)
+    IntegrationTesting_ProvideProbeRs(VSCODE_PROBE_RS "${PROJECT_ROOT_PATH}" "${MCU}")
+
+    IntegrationTesting_ReadMcuIdentification(IDENTIFIED_MCUS "${VSCODE_RAL_PRESETS_FILE}")
+    Prj_VSCode_GetChip(${MCU} CHIP)
+
+    IntegrationTesting_Get_LockHolder(HOLDER "flashing")
 
     message("=====================================")
     message("Flash: ${FIRMWARE_PATH}")
-    message("Chip ${CHIP}, probe ${PROBE}")
+    message("Board ${TEXT}, chip ${CHIP}")
     message("=====================================")
 
-    Build_Handler_Execute("Flashing of ${FIRMWARE}" "${VSCODE_PROBE_RS}" download --chip ${CHIP} --probe ${PROBE} "${FIRMWARE_PATH}")
-    Build_Handler_Execute("Reset of ${IN_MCU}" "${VSCODE_PROBE_RS}" reset --chip ${CHIP} --probe ${PROBE})
+    if("${IT_TARGET_${TARGET_IDX}_HOST}" STREQUAL "${IT_LOCAL_HOST}")
+
+        set(PROBE "${IT_TARGET_${TARGET_IDX}_PROBE}")
+
+        IntegrationTesting_LockProbe(USED_BY "${PROBE}" 0 "${HOLDER}")
+
+        if(NOT "${USED_BY}" STREQUAL "")
+            message(FATAL_ERROR "${TEXT} is used by ${USED_BY} - it is not flashed.")
+        endif()
+
+        set(PROBE_ARGS --chip ${CHIP} --probe ${PROBE})
+        Build_Handler_Execute("Flashing of ${FIRMWARE}" "${VSCODE_PROBE_RS}" download ${PROBE_ARGS} "${FIRMWARE_PATH}")
+        Build_Handler_Execute("Reset of ${MCU}" "${VSCODE_PROBE_RS}" reset ${PROBE_ARGS})
+
+    else()
+
+        Prj_VSCode_FlashRemote(${TARGET_IDX} "${FIRMWARE_PATH}" "${CHIP}" "${HOLDER}")
+
+    endif()
 
     message("=====================================")
-    message("Flash ${IN_MCU}_${IN_BUILD_TYPE} PASSED")
+    message("Flash of ${TEXT} PASSED")
     message("=====================================")
 endfunction()
 
@@ -1612,13 +1745,53 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
+# Function: Prj_VSCode_GetFailedHosts
+# Description: Text of the IT agents whose detection failed (member "failed" of the boards file of the
+#              detection): " Detection of <host> (<target>) failed: <error>." per agent.
+#
+# OUT_TEXT [out]: Text ("" when the detection of every agent was done).
+# ------------------------------------------------------------------------------
+function(Prj_VSCode_GetFailedHosts OUT_TEXT)
+
+    set(TEXT "")
+
+    if(EXISTS "${BUILD_HANDLER_BOARDS_FILE}")
+
+        file(READ "${BUILD_HANDLER_BOARDS_FILE}" BOARDS_CONTENT)
+        string(JSON FAILED_CNT ERROR_VARIABLE FAILED_ERROR LENGTH "${BOARDS_CONTENT}" failed)
+
+        if(FAILED_ERROR)
+            set(FAILED_CNT 0)
+        endif()
+
+        if(FAILED_CNT GREATER 0)
+            math(EXPR FAILED_LAST "${FAILED_CNT} - 1")
+            foreach(FAILED_IDX RANGE ${FAILED_LAST})
+                string(JSON HOST   GET "${BOARDS_CONTENT}" failed ${FAILED_IDX} host)
+                string(JSON TARGET GET "${BOARDS_CONTENT}" failed ${FAILED_IDX} target)
+                string(JSON ERROR  GET "${BOARDS_CONTENT}" failed ${FAILED_IDX} error)
+                if(NOT "${ERROR}" MATCHES "[.?!]$")
+                    string(APPEND ERROR ".")
+                endif()
+                string(APPEND TEXT " Detection of ${HOST} (${TARGET}) failed: ${ERROR}")
+            endforeach()
+        endif()
+
+    endif()
+
+    set(${OUT_TEXT} "${TEXT}" PARENT_SCOPE)
+endfunction()
+
+
+# ------------------------------------------------------------------------------
 # Function: Prj_VSCode_PrintTargets
 # Description: Prints the connected boards of this machine and of the IT agents (detected now) - one
 #              option per physical board: <ID>|<board> - <name of the board>|<host>.
 #
-# IN_ALL_BOARDS [in]: TRUE - the option BUILD_HANDLER_ALL_BOARDS_TEXT is printed too.
+# IN_ALL_BOARDS   [in]: TRUE - the option BUILD_HANDLER_ALL_BOARDS_TEXT is printed too.
+# IN_REMOTE_ONLY  [in]: TRUE - only the boards of the IT agents (serial monitor).
 # ------------------------------------------------------------------------------
-function(Prj_VSCode_PrintTargets IN_ALL_BOARDS)
+function(Prj_VSCode_PrintTargets IN_ALL_BOARDS IN_REMOTE_ONLY)
 
     Prj_VSCode_DetectTargets(TARGETS_CNT)
 
@@ -1629,6 +1802,11 @@ function(Prj_VSCode_PrintTargets IN_ALL_BOARDS)
         math(EXPR TARGETS_LAST "${TARGETS_CNT} - 1")
 
         foreach(TARGET_IDX RANGE ${TARGETS_LAST})
+
+            if(IN_REMOTE_ONLY AND
+               "${IT_TARGET_${TARGET_IDX}_HOST}" STREQUAL "${IT_LOCAL_HOST}")
+                continue()
+            endif()
 
             if("${IT_TARGET_${TARGET_IDX}_HOST}" STREQUAL "${IT_LOCAL_HOST}")
                 set(DESCRIPTION "this machine")
@@ -1657,8 +1835,14 @@ function(Prj_VSCode_PrintTargets IN_ALL_BOARDS)
     endif()
 
     if(NOT LINES)
-        # No output - the error of the input shows this text
-        message("No board is connected to this machine or to an IT agent of ItHosts.json.")
+        # No output - the error of the input shows this text, with the IT agents whose detection failed
+        if(IN_REMOTE_ONLY)
+            set(TEXT "No board is connected to an IT agent of ItHosts.json.")
+        else()
+            set(TEXT "No board is connected to this machine or to an IT agent of ItHosts.json.")
+        endif()
+        Prj_VSCode_GetFailedHosts(FAILED_TEXT)
+        message("${TEXT}${FAILED_TEXT}")
         return()
     endif()
 
@@ -1695,26 +1879,29 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
-# Function: Prj_VSCode_GetDebugPorts
-# Description: Ports of the debug server of a target - 127.0.0.1 of this machine (the debug configuration
-#              connects there, the tunnel of an IT agent listens there) and of the agent. They are given by
-#              the hash of the target (of its probe on the agent), the same target gets the same ports; a
-#              local port of an excluded port range of Windows (netsh) is moved behind it.
+# Function: Prj_VSCode_GetServerPorts
+# Description: Ports of a server of a target (debug server, serial server) - 127.0.0.1 of this machine (the
+#              debug configuration or the Serial Monitor connects there, the tunnel of an IT agent listens
+#              there) and of the agent. They are given by the hash of the target (of its probe on the agent),
+#              the same target gets the same ports; a local port of an excluded port range of Windows (netsh)
+#              is moved behind it.
 #
-# IN_IDX     [in]:  Index of the target (Prj_VSCode_GetTarget).
-# OUT_LOCAL  [out]: Port of this machine.
-# OUT_REMOTE [out]: Port of the agent.
+# IN_IDX         [in]:  Index of the target (Prj_VSCode_GetTarget).
+# IN_LOCAL_BASE  [in]:  First port of this machine (VSCODE_DEBUG_PORT_RANGE ports).
+# IN_REMOTE_BASE [in]:  First port of the agent (VSCODE_DEBUG_PORT_RANGE ports).
+# OUT_LOCAL      [out]: Port of this machine.
+# OUT_REMOTE     [out]: Port of the agent.
 # ------------------------------------------------------------------------------
-function(Prj_VSCode_GetDebugPorts IN_IDX OUT_LOCAL OUT_REMOTE)
+function(Prj_VSCode_GetServerPorts IN_IDX IN_LOCAL_BASE IN_REMOTE_BASE OUT_LOCAL OUT_REMOTE)
 
     string(MD5 LOCAL_HASH "${IT_TARGET_${IN_IDX}_ID}")
     string(SUBSTRING "${LOCAL_HASH}" 0 6 LOCAL_HASH)
-    math(EXPR LOCAL_PORT "${VSCODE_DEBUG_LOCAL_PORT_BASE} + 0x${LOCAL_HASH} % ${VSCODE_DEBUG_PORT_RANGE}")
+    math(EXPR LOCAL_PORT "${IN_LOCAL_BASE} + 0x${LOCAL_HASH} % ${VSCODE_DEBUG_PORT_RANGE}")
 
     IntegrationTesting_Get_LockKey(PROBE_KEY "${IT_TARGET_${IN_IDX}_PROBE}")
     string(MD5 REMOTE_HASH "${PROBE_KEY}")
     string(SUBSTRING "${REMOTE_HASH}" 0 6 REMOTE_HASH)
-    math(EXPR REMOTE_PORT "${VSCODE_DEBUG_REMOTE_PORT_BASE} + 0x${REMOTE_HASH} % ${VSCODE_DEBUG_PORT_RANGE}")
+    math(EXPR REMOTE_PORT "${IN_REMOTE_BASE} + 0x${REMOTE_HASH} % ${VSCODE_DEBUG_PORT_RANGE}")
 
     if(CMAKE_HOST_WIN32)
 
@@ -1762,7 +1949,11 @@ endfunction()
 function(Prj_VSCode_PrintDebugBoardServer IN_ID)
 
     Prj_VSCode_GetTarget("${IN_ID}" TARGET_IDX)
-    Prj_VSCode_GetDebugPorts(${TARGET_IDX} LOCAL_PORT REMOTE_PORT)
+    Prj_VSCode_GetServerPorts(${TARGET_IDX}
+                              ${VSCODE_DEBUG_LOCAL_PORT_BASE}
+                              ${VSCODE_DEBUG_REMOTE_PORT_BASE}
+                              LOCAL_PORT
+                              REMOTE_PORT)
 
     set(HOST "${IT_TARGET_${TARGET_IDX}_HOST}")
     set(HOST_TOOLS "")
@@ -1787,6 +1978,97 @@ function(Prj_VSCode_PrintDebugBoardServer IN_ID)
     file(WRITE "${VSCODE_DEBUG_TARGET_FILE}" "${CONTENT}")
 
     Prj_VSCode_PrintOptions("127.0.0.1:${LOCAL_PORT}")
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Prj_VSCode_SerialServe
+# Description: Task "EmBi: Serial monitor on board" - the virtual COM port of the picked board of an IT agent
+#              on 127.0.0.1:<port> of this machine: the serial server of the agent tools (IT agent interface,
+#              embi-agent serial-server) behind ssh -tt -L <port>:127.0.0.1:<port of the agent>, nothing is
+#              copied to the agent. The Serial Monitor (ms-vscode.vscode-serial-monitor) connects there in TCP
+#              mode; the same board gets the same port. The probe is not locked - the board is debugged and
+#              tested meanwhile. The task runs until it is terminated (the serial server of the agent ends with
+#              the connection) or ends with an error (port used by another serial monitor, agent not reachable).
+#              A board of this machine has its virtual COM port as a serial port of this machine - the Serial
+#              Monitor opens it directly.
+#
+# IN_ID   [in]: ID of the picked board.
+# IN_BAUD [in]: Baud rate of the virtual COM port.
+# ------------------------------------------------------------------------------
+function(Prj_VSCode_SerialServe IN_ID IN_BAUD)
+
+    if(NOT "${IN_BAUD}" MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "Required BAUD '${IN_BAUD}' is not a baud rate.")
+    endif()
+
+    Prj_VSCode_GetTarget("${IN_ID}" TARGET_IDX)
+
+    set(HOST "${IT_TARGET_${TARGET_IDX}_HOST}")
+    set(TEXT "${IT_TARGET_${TARGET_IDX}_TEXT}")
+
+    if("${HOST}" STREQUAL "${IT_LOCAL_HOST}")
+        message(FATAL_ERROR "${TEXT} is a board of this machine - its virtual COM port is a serial port of this "
+                            "machine, open it in the Serial Monitor directly.")
+    endif()
+
+    Prj_VSCode_GetServerPorts(${TARGET_IDX}
+                              ${VSCODE_SERIAL_LOCAL_PORT_BASE}
+                              ${VSCODE_SERIAL_REMOTE_PORT_BASE}
+                              LOCAL_PORT
+                              REMOTE_PORT)
+
+    IntegrationTesting_ReadItHosts(HOSTS "${PROJECT_ROOT_PATH}")
+    IntegrationTesting_Get_LockHolder(HOLDER "serial monitor")
+
+    # The local port of the tunnel of the previous serial monitor of a restart may still be closing
+    foreach(POLL_IDX RANGE 1 30)
+        IntegrationTesting_IsListening(PORT_USED ${LOCAL_PORT})
+        if(NOT PORT_USED)
+            break()
+        endif()
+        execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 0.5)
+    endforeach()
+
+    if(PORT_USED)
+        message(FATAL_ERROR "Port ${LOCAL_PORT} of 127.0.0.1 is used - the serial monitor of ${TEXT} is open already "
+                            "(another task \"EmBi: Serial monitor on board\"), or another program uses the port.")
+    endif()
+
+    IntegrationTesting_Get_SshCommand(SSH_COMMAND
+                                      "${IT_TARGET_${TARGET_IDX}_TARGET}"
+                                      TRUE
+                                      -o ExitOnForwardFailure=yes
+                                      -L "${LOCAL_PORT}:127.0.0.1:${REMOTE_PORT}")
+
+    IntegrationTesting_Get_AgentLine(REMOTE_COMMAND
+                                     "${IT_HOST_${HOST}_TOOLS}"
+                                     serial-server
+                                     --probe
+                                     "${IT_TARGET_${TARGET_IDX}_PROBE}"
+                                     --port
+                                     ${REMOTE_PORT}
+                                     --baud
+                                     ${IN_BAUD}
+                                     --holder
+                                     "${HOLDER}")
+
+    message("EmBi: serial monitor of ${TEXT}, ${IN_BAUD} baud")
+    message("EmBi: Serial Monitor - Monitor Mode TCP, Host 127.0.0.1, Port ${LOCAL_PORT}, Start Monitoring")
+    message("EmBi: the virtual COM port stays open until this task is terminated")
+
+    execute_process(COMMAND ${SSH_COMMAND} "${REMOTE_COMMAND}"
+                    RESULT_VARIABLE SERVE_RESULT)
+
+    if(SERVE_RESULT EQUAL IT_AGENT_NOT_INSTALLED)
+        message(FATAL_ERROR "embi-agent is not installed on the IT agent ${HOST} (${IT_TARGET_${TARGET_IDX}_TARGET}) "
+                            "- the pipeline ItAgentUpdate of EmBi_Tester installs it (or tools of the host in "
+                            "ItHosts.json).")
+    endif()
+
+    if(NOT SERVE_RESULT EQUAL 0)
+        message(FATAL_ERROR "Serial monitor of ${TEXT} ended with ${SERVE_RESULT} - see the output of the agent above.")
+    endif()
 endfunction()
 
 
@@ -1920,7 +2202,7 @@ endfunction()
 # cmake -DFUNCTION_ID="MCU_LIST"                                    -P Prj_VSCode_Handler.cmake : List MCUs of the project presets
 # cmake -DFUNCTION_ID="FIRMWARE_NAME"                               -P Prj_VSCode_Handler.cmake : Print current firmware name of the root CMakeLists.txt
 # cmake -DFUNCTION_ID="INIT"  -DMCU_IDS="1,3" -DFIRMWARE_NAME=Fw    -P Prj_VSCode_Handler.cmake : Generate .vscode, debug configurations of MCUs 1 and 3 (0 = all, empty = connected boards), firmware Fw_<build type>.elf (empty = current name)
-# cmake -DFUNCTION_ID="FLASH" -DMCU=STM32F407xG -DBUILD_TYPE=Debug  -P Prj_VSCode_Handler.cmake : Build, flash and reset MCU STM32F407xG
+# cmake -DFUNCTION_ID="FLASH" -DTARGET=<ID> -DBUILD_TYPE=Debug      -P Prj_VSCode_Handler.cmake : Build for the picked board, flash it and reset its MCU (this machine or IT agent)
 # cmake -DFUNCTION_ID="EXTENSIONS_CHECK"                            -P Prj_VSCode_Handler.cmake : Print recommended extensions that are not installed
 # cmake -DFUNCTION_ID="EXTENSIONS_INSTALL"                          -P Prj_VSCode_Handler.cmake : Install the missing recommended extensions (code command)
 # cmake -DFUNCTION_ID="PICK_MCU"                                    -P Prj_VSCode_Handler.cmake : Print MCUs (input of the tasks)
@@ -1934,6 +2216,8 @@ endfunction()
 # cmake -DFUNCTION_ID="PICK_DEBUG_BOARD"                            -P Prj_VSCode_Handler.cmake : Detect and print the boards of this machine and of the IT agents (input debugBoard)
 # cmake -DFUNCTION_ID="DEBUG_BOARD_SERVER" -DTARGET=<ID>            -P Prj_VSCode_Handler.cmake : Print 127.0.0.1:<port> of the debug server of the picked board, write Build/DebugTarget.cmake
 # cmake -DFUNCTION_ID="DEBUG_BOARD_CHIP" -DTARGET=<ID>              -P Prj_VSCode_Handler.cmake : Print the probe (PROBE), chip (CHIP), SVD file (SVD), Debug firmware (FIRMWARE) or the integration tests (TESTS) of the picked board
+# cmake -DFUNCTION_ID="PICK_SERIAL_BOARD"                           -P Prj_VSCode_Handler.cmake : Detect and print the boards of the IT agents (input serialBoard)
+# cmake -DFUNCTION_ID="SERIAL_SERVE" -DTARGET=<ID> -DBAUD=115200    -P Prj_VSCode_Handler.cmake : Open the virtual COM port of the picked board of an IT agent on 127.0.0.1:<port> for the Serial Monitor (TCP mode) until terminated
 #==============================================================================#
 if(CMAKE_SCRIPT_MODE_FILE AND
    CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
@@ -1964,11 +2248,19 @@ if(CMAKE_SCRIPT_MODE_FILE AND
 
     elseif("${FUNCTION_ID}" STREQUAL "PICK_BOARD")
 
-        Prj_VSCode_PrintTargets(TRUE)
+        Prj_VSCode_PrintTargets(TRUE FALSE)
 
     elseif("${FUNCTION_ID}" STREQUAL "PICK_DEBUG_BOARD")
 
-        Prj_VSCode_PrintTargets(FALSE)
+        Prj_VSCode_PrintTargets(FALSE FALSE)
+
+    elseif("${FUNCTION_ID}" STREQUAL "PICK_SERIAL_BOARD")
+
+        Prj_VSCode_PrintTargets(FALSE TRUE)
+
+    elseif("${FUNCTION_ID}" STREQUAL "SERIAL_SERVE")
+
+        Prj_VSCode_SerialServe("${TARGET}" "${BAUD}")
 
     elseif("${FUNCTION_ID}" STREQUAL "DEBUG_BOARD_SERVER")
 
@@ -2012,7 +2304,13 @@ if(CMAKE_SCRIPT_MODE_FILE AND
             message(FATAL_ERROR "Required BUILD_TYPE '${BUILD_TYPE}' is not correct (Debug, Release).")
         endif()
 
-        Prj_VSCode_Flash("${MCU}" "${BUILD_TYPE}")
+        # The task of a .vscode of an older platform picks the MCU, not the board
+        if("${TARGET}" STREQUAL "")
+            message(FATAL_ERROR "Required TARGET (picked board) is missing - the task \"EmBi: Flash\" of this .vscode "
+                                "picks the MCU, generate .vscode again (EmBi: Setup, VSCode project initialization).")
+        endif()
+
+        Prj_VSCode_Flash("${TARGET}" "${BUILD_TYPE}")
 
     else()
 
