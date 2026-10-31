@@ -848,6 +848,9 @@ function(IntegrationTesting_Add_Test)
 
     set_target_properties(${TEST_TARGET} PROPERTIES SUFFIX ".elf")
 
+    # The firmware is linked again when the linker script (Bsp/Linker or USER_LINKER_SCRIPT) changes
+    set_property(TARGET ${TEST_TARGET} APPEND PROPERTY LINK_DEPENDS "${LINKER_SCRIPT}")
+
     target_include_directories(${TEST_TARGET}
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}
