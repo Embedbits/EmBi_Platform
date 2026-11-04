@@ -137,9 +137,22 @@ static regMem_RequestState_t regMem_Trap_Protect     ( int protection );
 #endif
 
 #if !defined(_WIN32) && !defined(MAP_FIXED_NOREPLACE)
+#if defined(__APPLE__)
+/** macOS has no such flag (mmap() rejects the Linux value): the address is only a hint, result is checked */
+#define MAP_FIXED_NOREPLACE             ( 0 )
+#else
 /** Linux < 4.17 headers: flag is then used only as hint, result is checked */
 #define MAP_FIXED_NOREPLACE             ( 0x100000 )
+#endif /* __APPLE__ */
 #endif
+
+#if defined(__APPLE__)
+/** File descriptor of an anonymous mapping (mmap) */
+#define REGMEM_MMAP_ANONYMOUS_FD        ( -1 )
+
+/** File offset of an anonymous mapping (mmap) */
+#define REGMEM_MMAP_ANONYMOUS_OFFSET    ( 0 )
+#endif /* __APPLE__ */
 
 /* ============================== MACROS ==================================== */
 
@@ -1377,6 +1390,17 @@ static regMem_RequestState_t regMem_Clear_Region( regMem_RegionId_t regionId )
         void *mapAddr   = VirtualAlloc( addr, size, MEM_COMMIT, PAGE_READWRITE );
 
         if( ( FALSE != freeState ) && ( addr == mapAddr ) )
+#elif defined(__APPLE__)
+        /* madvise( MADV_DONTNEED ) does not zero anonymous pages on macOS - the region is
+         * replaced by a new zero-filled anonymous mapping at the same address */
+        void *mapAddr = mmap( addr,
+                              size,
+                              PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED,
+                              REGMEM_MMAP_ANONYMOUS_FD,
+                              REGMEM_MMAP_ANONYMOUS_OFFSET );
+
+        if( addr == mapAddr )
 #else
         /* Private anonymous pages are zero-filled on the next access */
         int adviseState = madvise( addr, size, MADV_DONTNEED );

@@ -167,8 +167,27 @@ run_bsp_update() {
     initialization
 }
 
+# Project of the middleware - asked only when the platform root folder has more projects (projects of the cores)
+select_mw_project() {
+    MW_PROJECT_ARG=""
+    MW_PROJECTS=$(cmake -DFUNCTION_ID="PROJECT_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake | tr -d '\r')
+    if [ -z "$MW_PROJECTS" ]; then
+        return 0
+    fi
+    echo "$MW_PROJECTS"
+    read -p "Enter project ID (numerical): " PROJECT_ID
+    if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "0" ]; then
+        return 1
+    fi
+    MW_PROJECT_ARG="-DPROJECT_ID=$PROJECT_ID"
+}
+
 run_mw_config() {
     clear
+    if ! select_mw_project; then
+        initialization
+        return
+    fi
     cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
     read -p "Enter middleware ID (numerical): " MODULE_ID
     if [ -z "$MODULE_ID" ] || [ "$MODULE_ID" = "0" ]; then
@@ -178,20 +197,24 @@ run_mw_config() {
     cmake -DFUNCTION_ID="VERSION_LIST" -DMODULE_ID="$MODULE_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
     read -p "Enter version ID (numerical, 0 = Latest): " VERSION_ID
     VERSION_ID="${VERSION_ID:-0}"
-    cmake -DFUNCTION_ID="MW_CONFIG" -DMODULE_ID="$MODULE_ID" -DVERSION_ID="$VERSION_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+    cmake -DFUNCTION_ID="MW_CONFIG" $MW_PROJECT_ARG -DMODULE_ID="$MODULE_ID" -DVERSION_ID="$VERSION_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
     pause
     initialization
 }
 
 run_mw_update() {
     clear
+    if ! select_mw_project; then
+        initialization
+        return
+    fi
     cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
     read -p "Enter middleware ID to update (numerical): " MODULE_ID
     if [ -z "$MODULE_ID" ] || [ "$MODULE_ID" = "0" ]; then
         initialization
         return
     fi
-    cmake -DFUNCTION_ID="MW_UPDATE" -DMODULE_ID="$MODULE_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+    cmake -DFUNCTION_ID="MW_UPDATE" $MW_PROJECT_ARG -DMODULE_ID="$MODULE_ID" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
     pause
     initialization
 }

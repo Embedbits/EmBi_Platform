@@ -747,6 +747,112 @@ function(Mw_ModuleHandler_PrintVersionList IN_MODULE_ID)
 endfunction()
 
 
+# ------------------------------------------------------------------------------
+# Function: Mw_ModuleHandler_GetProjectList
+# Description: Projects of the platform root folder - the platform root folder
+#              itself (".") and its subfolders (projects of the cores of a
+#              multi-core MCU) with their own CMakeLists.txt and
+#              CMakePresets.json (the projects of SysConfig.cmake).
+#
+# OUT_PROJECTS [out]: Folders of the projects relative to the platform root
+#                     folder.
+# ------------------------------------------------------------------------------
+function(Mw_ModuleHandler_GetProjectList OUT_PROJECTS)
+
+    SysConfig_Get_PlatformRootPath(PLATFORM_ROOT_PATH)
+    get_filename_component(PLATFORM_PATH "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../../.." REALPATH)
+
+    set(PROJECTS "")
+
+    if(EXISTS "${PLATFORM_ROOT_PATH}/CMakeLists.txt" AND EXISTS "${PLATFORM_ROOT_PATH}/CMakePresets.json")
+        list(APPEND PROJECTS ".")
+    endif()
+
+    file(GLOB CHILDREN RELATIVE "${PLATFORM_ROOT_PATH}" "${PLATFORM_ROOT_PATH}/*")
+
+    foreach(CHILD IN LISTS CHILDREN)
+        if(NOT "${PLATFORM_ROOT_PATH}/${CHILD}" STREQUAL "${PLATFORM_PATH}" AND
+           EXISTS "${PLATFORM_ROOT_PATH}/${CHILD}/CMakeLists.txt"           AND
+           EXISTS "${PLATFORM_ROOT_PATH}/${CHILD}/CMakePresets.json")
+            list(APPEND PROJECTS "${CHILD}")
+        endif()
+    endforeach()
+
+    set(${OUT_PROJECTS} "${PROJECTS}" PARENT_SCOPE)
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Mw_ModuleHandler_PrintProjectList
+# Description: Prints the projects of the platform root folder to the standard
+#              output (Setup asks for the project when something is printed) -
+#              nothing when the platform root folder has one project only.
+# ------------------------------------------------------------------------------
+function(Mw_ModuleHandler_PrintProjectList)
+
+    Mw_ModuleHandler_GetProjectList(PROJECTS)
+
+    list(LENGTH PROJECTS PROJECT_COUNT)
+    if(PROJECT_COUNT LESS 2)
+        return()
+    endif()
+
+    SysConfig_Get_PlatformRootPath(PLATFORM_ROOT_PATH)
+    get_filename_component(ROOT_NAME "${PLATFORM_ROOT_PATH}" NAME)
+
+    set(LINES "[0]: Return back")
+    set(DISPLAY_INDEX 0)
+
+    foreach(PROJECT IN LISTS PROJECTS)
+        math(EXPR DISPLAY_INDEX "${DISPLAY_INDEX} + 1")
+        if("${PROJECT}" STREQUAL ".")
+            list(APPEND LINES "[${DISPLAY_INDEX}]: ${ROOT_NAME} (platform root folder)")
+        else()
+            list(APPEND LINES "[${DISPLAY_INDEX}]: ${PROJECT}")
+        endif()
+    endforeach()
+
+    list(JOIN LINES "\n" TEXT)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E echo "${TEXT}")
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Mw_ModuleHandler_SelectProject
+# Description: The middlewares of the project IN_PROJECT_ID of
+#              Mw_ModuleHandler_GetProjectList - the GIT operations stay in the
+#              platform root folder (the repository of the submodules), the
+#              Middlewares folder is the one of the project
+#              (<project>/Middlewares).
+#
+# IN_PROJECT_ID [in]: Project numerical identification (1 = first project).
+# ------------------------------------------------------------------------------
+function(Mw_ModuleHandler_SelectProject IN_PROJECT_ID)
+
+    Mw_ModuleHandler_GetProjectList(PROJECTS)
+    list(LENGTH PROJECTS PROJECT_COUNT)
+
+    if(NOT "${IN_PROJECT_ID}" MATCHES "^[0-9]+$" OR
+       IN_PROJECT_ID LESS 1                      OR
+       IN_PROJECT_ID GREATER PROJECT_COUNT)
+        message(FATAL_ERROR "Required PROJECT_ID is not correct.")
+    endif()
+
+    math(EXPR PROJECT_INDEX "${IN_PROJECT_ID} - 1")
+    list(GET PROJECTS ${PROJECT_INDEX} PROJECT)
+
+    SysConfig_Get_PlatformRootPath(PLATFORM_ROOT_PATH)
+    set(PROJECT_ROOT_PATH "${PLATFORM_ROOT_PATH}" PARENT_SCOPE)
+
+    if(NOT "${PROJECT}" STREQUAL ".")
+        set(MW_REL_PATH      "${PROJECT}/Middlewares"      PARENT_SCOPE)
+        set(MW_CORE_REL_PATH "${PROJECT}/Middlewares/Core" PARENT_SCOPE)
+    endif()
+
+    message(STATUS "Middlewares of the project '${PROJECT}'")
+endfunction()
+
+
 #==============================================================================#
 # Main functionality
 # Usage:
@@ -754,13 +860,23 @@ endfunction()
 # cmake -DFUNCTION_ID="VERSION_LIST" -DMODULE_ID=2                -P Mw_ModuleHandler.cmake : List available versions of component 2
 # cmake -DFUNCTION_ID="MW_CONFIG"    -DMODULE_ID=2 -DVERSION_ID=0  -P Mw_ModuleHandler.cmake : Add/switch component 2 to its latest version
 # cmake -DFUNCTION_ID="MW_UPDATE"    -DMODULE_ID=2                 -P Mw_ModuleHandler.cmake : Update already-added component 2 to its latest version
+# cmake -DFUNCTION_ID="PROJECT_LIST"                              -P Mw_ModuleHandler.cmake : List projects of the platform root folder (nothing for one project)
+# -DPROJECT_ID=2 (MW_CONFIG, MW_UPDATE)                                                    : Middlewares of project 2 of PROJECT_LIST
 #==============================================================================#
 if(CMAKE_SCRIPT_MODE_FILE AND
    CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
 
+    if(DEFINED PROJECT_ID)
+        Mw_ModuleHandler_SelectProject("${PROJECT_ID}")
+    endif()
+
     if("${FUNCTION_ID}" STREQUAL "MODULE_LIST")
 
         Mw_ModuleHandler_PrintModuleList()
+
+    elseif("${FUNCTION_ID}" STREQUAL "PROJECT_LIST")
+
+        Mw_ModuleHandler_PrintProjectList()
 
     elseif("${FUNCTION_ID}" STREQUAL "VERSION_LIST")
 

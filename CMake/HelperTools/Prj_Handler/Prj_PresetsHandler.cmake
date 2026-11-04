@@ -38,12 +38,18 @@ get_filename_component(SYSTEM_CONFIG_FILE_PATH "${CMAKE_CURRENT_LIST_DIR}/../../
 # Include file with system configuration values
 include("${SYSTEM_CONFIG_FILE_PATH}")
 
+# Section of the option bytes of the MCUs of the project in the project CMakeLists.txt
+include("${CMAKE_CURRENT_LIST_DIR}/../../OptionBytes/OptionBytes.cmake")
+
 #==============================================================================#
 # Global variables
 #==============================================================================#
 
 # Read project root folder path
 SysConfig_Get_ProjectRootPath(PROJECT_ROOT_PATH)
+
+# Read platform root folder path (Bsp - the parent folder of the projects of the cores of a multi-core MCU)
+SysConfig_Get_PlatformRootPath(PLATFORM_ROOT_PATH)
 
 # Vendor key of EmBi specific preset data
 set(PRJ_PRESETS_VENDOR_KEY              "embedbits.com/EmBi")
@@ -55,7 +61,7 @@ set(PRJ_PRESETS_TEMPLATE_FILE           "${CMAKE_CURRENT_LIST_DIR}/Template_CMak
 # Included preset files (paths relative to project root, as used by "include")
 get_filename_component(PRJ_PLATFORM_PRESETS_PATH "${CMAKE_CURRENT_LIST_DIR}/../../Presets/PlatformPresets.json" REALPATH)
 file(RELATIVE_PATH PRJ_PLATFORM_PRESETS_REL_PATH "${PROJECT_ROOT_PATH}" "${PRJ_PLATFORM_PRESETS_PATH}")
-set(PRJ_RAL_PRESETS_REL_PATH            "Bsp/Ral/RalPresets.json")
+file(RELATIVE_PATH PRJ_RAL_PRESETS_REL_PATH "${PROJECT_ROOT_PATH}" "${PLATFORM_ROOT_PATH}/Bsp/Ral/RalPresets.json")
 
 # Hidden preset of the project root file inherited by every generated preset
 set(PRJ_PROJECT_PRESET_NAME             "project")
@@ -279,6 +285,61 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
+# Function: Prj_PresetsHandler_CoreTargets
+# Description:
+#   Keeps the MCUs with the core of the project - the project of a core of a
+#   multi-core MCU (TARGET_CORE of the project CMakeLists.txt) is built only for
+#   the MCUs which list the core in the identification of their Ral preset
+#   ("cores", ral-presets.sh). A project without TARGET_CORE keeps all MCUs.
+#
+# IN_JSON        [in]:     Content of Ral presets file.
+# IN_OUT_TARGETS [in/out]: Name of list variable with MCU presets.
+# ------------------------------------------------------------------------------
+function(Prj_PresetsHandler_CoreTargets IN_JSON IN_OUT_TARGETS)
+
+    set(TARGET_CORE "")
+
+    if(EXISTS "${PROJECT_ROOT_PATH}/CMakeLists.txt")
+        file(STRINGS "${PROJECT_ROOT_PATH}/CMakeLists.txt" CORE_LINE REGEX "^[ \t]*set\\(TARGET_CORE[ \t]+\"[^\"]*\"")
+        if(CORE_LINE MATCHES "set\\(TARGET_CORE[ \t]+\"([^\"]*)\"")
+            set(TARGET_CORE "${CMAKE_MATCH_1}")
+        endif()
+    endif()
+
+    if(NOT "${TARGET_CORE}" STREQUAL "")
+
+        set(CORE_TARGETS "")
+
+        foreach(TARGET_NAME IN LISTS ${IN_OUT_TARGETS})
+
+            Prj_PresetsHandler_FindPreset("${IN_JSON}" "${TARGET_NAME}" TARGET_INDEX)
+            string(JSON CORE_COUNT ERROR_VARIABLE JSON_ERROR
+                   LENGTH "${IN_JSON}" configurePresets ${TARGET_INDEX} vendor "${PRJ_PRESETS_VENDOR_KEY}" identification cores)
+
+            if(NOT JSON_ERROR AND CORE_COUNT GREATER 0)
+                math(EXPR LAST_CORE_INDEX "${CORE_COUNT} - 1")
+                foreach(CORE_INDEX RANGE ${LAST_CORE_INDEX})
+                    string(JSON CORE_NAME
+                           GET "${IN_JSON}" configurePresets ${TARGET_INDEX} vendor "${PRJ_PRESETS_VENDOR_KEY}" identification cores ${CORE_INDEX} name)
+                    if(CORE_NAME STREQUAL TARGET_CORE)
+                        list(APPEND CORE_TARGETS "${TARGET_NAME}")
+                    endif()
+                endforeach()
+            endif()
+
+        endforeach()
+
+        list(JOIN CORE_TARGETS ", " CORE_TARGETS_TEXT)
+        message(STATUS "Project of the core ${TARGET_CORE} - presets of the MCUs with the core: ${CORE_TARGETS_TEXT}")
+
+        set(${IN_OUT_TARGETS} "${CORE_TARGETS}" PARENT_SCOPE)
+
+    endif()
+
+endfunction()
+
+
+# ------------------------------------------------------------------------------
 # Function: Prj_PresetsHandler_FindPreset
 # Description: Returns index of configure preset with given name.
 #
@@ -456,6 +517,7 @@ function(Prj_PresetsHandler_Generate)
     # ----------------------------------------------------------
     Prj_PresetsHandler_ReadPresets("${PLATFORM_JSON}" buildType BUILD_TYPES)
     Prj_PresetsHandler_ReadPresets("${RAL_JSON}" target TARGETS)
+    Prj_PresetsHandler_CoreTargets("${RAL_JSON}" TARGETS)
 
     # ----------------------------------------------------------
     # Generated presets
@@ -600,6 +662,9 @@ function(Prj_PresetsHandler_Generate)
 
     list(LENGTH GEN_CONFIGURE_ENTRIES GEN_COUNT)
     message(STATUS "CMakePresets.json updated - ${GEN_COUNT} presets generated from ${PRJ_RAL_PRESETS_REL_PATH}.")
+
+    # Option bytes of the MCUs of the project in the project CMakeLists.txt
+    OptionBytes_UpdateSection("${PROJECT_ROOT_PATH}/CMakeLists.txt" "${RAL_PRESETS_PATH}" "${TARGETS}")
 
 endfunction()
 

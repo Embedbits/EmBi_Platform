@@ -13,10 +13,13 @@
 # Unit tests run on host for selected MCU (<MCU>_UnitTest). Integration tests
 # run on board - connected boards are detected when the boards are listed
 # (IntegrationTesting_Detect.cmake: MCU of every probe identified by the Ral
-# presets, optional IntegrationTestBoards.json of the project as override, see
+# presets, optional ItBoards.json of the project as override, see
 # IntegrationTesting/README.md) and stored in Build/IntegrationTestBoards.json.
-# Every board defines its preset and probes, the preset is configured with
-# INTEGRATION_TEST_BOARD=<board>.
+# The list of the boards is the list of the targets - one physical board (probe)
+# of this machine or of an IT agent of ItHosts.json per item; the preset of its
+# board is configured with INTEGRATION_TEST_BOARD=<board>,
+# INTEGRATION_TEST_PROBE=<probe of the target> and INTEGRATION_TEST_HOST=<IT
+# agent of the target> (the firmware is executed there, IntegrationTesting_Run.cmake).
 #
 # Test sets are CTest labels of the build (every test set registers label of
 # its name, UnitTesting_Add_Test / IntegrationTesting_Add_Test), one test set
@@ -27,11 +30,14 @@
 # presets of all boards are only configured to collect their test sets, the
 # execution is done by IntegrationTesting_AllBoards.cmake (connected boards are
 # detected again, built and tested), results are summarized from the JUnit
-# files per probe (Build/<preset>/IntegrationTestResults_<sn>.xml).
+# files per target (Build/<preset>/IntegrationTestResults_<sn>.xml,
+# IntegrationTestResults_<host>_<sn>.xml of an IT agent).
 #
 # Besides numerical IDs of the interactive menu, the MCU, the test target and
 # the test set can be selected by name (BUILD with MCU, TEST) - used by tasks
-# of the VSCode project (Prj_VSCode_Handler.cmake).
+# of the VSCode project (Prj_VSCode_Handler.cmake). DETECT_BOARDS only detects
+# the connected boards (this machine and the IT agents) without the numbered
+# list of the menu - a task terminal takes no answer.
 #
 # Code coverage (-DTEST_COVERAGE=ON of TEST_BUILD, TEST_RUN, TEST): the tests are built with the
 # gcov instrumentation of the tested code (UNIT_TEST_COVERAGE / INTEGRATION_TEST_COVERAGE, see
@@ -73,6 +79,9 @@ set(BUILD_HANDLER_FW_LABELS     "unit;integration")
 get_filename_component(BUILD_HANDLER_IT_ALL_BOARDS "${CMAKE_CURRENT_LIST_DIR}/../../IntegrationTesting/IntegrationTesting_AllBoards.cmake" REALPATH)
 get_filename_component(BUILD_HANDLER_IT_DETECT "${CMAKE_CURRENT_LIST_DIR}/../../IntegrationTesting/IntegrationTesting_Detect.cmake" REALPATH)
 set(BUILD_HANDLER_ALL_BOARDS_TEXT "All connected boards")
+
+# Targets of the boards file of connected boards (physical boards of this machine and of the IT agents)
+include("${CMAKE_CURRENT_LIST_DIR}/../../IntegrationTesting/IntegrationTesting_Detect.cmake")
 
 # Optional MCU identification file of the detection (default Bsp/Ral/RalPresets.json)
 set(BUILD_HANDLER_DETECT_ARGS   "")
@@ -351,11 +360,11 @@ function(Build_Handler_IsAllBoards IN_TEST_TYPE IN_TARGET_ID OUT_ALL)
 
     set(ALL_BOARDS FALSE)
 
-    if("${IN_TEST_TYPE}" STREQUAL "IT" AND "${IN_TARGET_ID}" MATCHES "^[0-9]+$")
+    if("${IN_TEST_TYPE}" STREQUAL "IT" AND
+       "${IN_TARGET_ID}" MATCHES "^[0-9]+$")
 
-        Build_Handler_GetBoardList(BOARD_LIST PRESET_LIST)
-        list(LENGTH BOARD_LIST BOARDS_CNT)
-        math(EXPR ALL_BOARDS_ID "${BOARDS_CNT} + 1")
+        IntegrationTesting_ReadTargets(TARGETS_CNT "${BUILD_HANDLER_BOARDS_FILE}")
+        math(EXPR ALL_BOARDS_ID "${TARGETS_CNT} + 1")
 
         if(IN_TARGET_ID EQUAL ALL_BOARDS_ID)
             set(ALL_BOARDS TRUE)
@@ -392,14 +401,29 @@ function(Build_Handler_GetTestPreset IN_TEST_TYPE IN_TARGET_ID OUT_PRESET OUT_AR
 
     elseif("${IN_TEST_TYPE}" STREQUAL "IT")
 
-        Build_Handler_GetBoardList(BOARD_LIST PRESET_LIST)
-        Build_Handler_GetListItem("${BOARD_LIST}" "${IN_TARGET_ID}" "board" BOARD)
+        # Target = one physical board (probe) of this machine or of an IT agent
+        IntegrationTesting_ReadTargets(TARGETS_CNT "${BUILD_HANDLER_BOARDS_FILE}")
 
-        list(FIND BOARD_LIST "${BOARD}" BOARD_INDEX)
-        list(GET PRESET_LIST ${BOARD_INDEX} PRESET)
+        if(NOT "${IN_TARGET_ID}" MATCHES "^[0-9]+$" OR
+           IN_TARGET_ID LESS 1 OR
+           IN_TARGET_ID GREATER TARGETS_CNT)
+            message(FATAL_ERROR "Required board ID '${IN_TARGET_ID}' is not correct (1-${TARGETS_CNT}).")
+        endif()
 
-        set(ARGS   "-DINTEGRATION_TEST_BOARD=${BOARD};-DINTEGRATION_TEST_BOARDS_FILE=${BUILD_HANDLER_BOARDS_FILE};-DINTEGRATION_TEST_COVERAGE=${TEST_COVERAGE};-DINTEGRATION_TEST_COVERAGE_CTEST_REPORT=OFF")
-        set(TARGET "${BOARD}")
+        math(EXPR TARGET_IDX "${IN_TARGET_ID} - 1")
+
+        set(BOARD  "${IT_TARGET_${TARGET_IDX}_BOARD}")
+        set(PRESET "${IT_TARGET_${TARGET_IDX}_PRESET}")
+        set(HOST   "${IT_TARGET_${TARGET_IDX}_HOST}")
+
+        if("${HOST}" STREQUAL "${IT_LOCAL_HOST}")
+            set(HOST "")
+        endif()
+
+        set(ARGS   "-DINTEGRATION_TEST_BOARD=${BOARD}" "-DINTEGRATION_TEST_BOARDS_FILE=${BUILD_HANDLER_BOARDS_FILE}")
+        list(APPEND ARGS "-DINTEGRATION_TEST_PROBE=${IT_TARGET_${TARGET_IDX}_PROBE}" "-DINTEGRATION_TEST_HOST=${HOST}")
+        list(APPEND ARGS "-DINTEGRATION_TEST_COVERAGE=${TEST_COVERAGE}" "-DINTEGRATION_TEST_COVERAGE_CTEST_REPORT=OFF")
+        set(TARGET "${IT_TARGET_${TARGET_IDX}_TEXT}")
 
     else()
 
@@ -671,6 +695,91 @@ endfunction()
 
 
 # ------------------------------------------------------------------------------
+# Function: Build_Handler_Get_BoardBuild
+# Description: MCU, preset and build folder of the build of a board (a picked board, its configuration of
+#              ItBoards.json - the boards file of the detection): Build/<MCU>_<build type>_<board>.
+#
+# IN_BOARD      [in]:  Board name (boards file of the detection).
+# IN_BUILD_TYPE [in]:  Debug or Release.
+# OUT_MCU       [out]: MCU of the board (its integration test preset).
+# OUT_PRESET    [out]: Configure preset <MCU>_<build type>.
+# OUT_DIR       [out]: Build folder of the board.
+# ------------------------------------------------------------------------------
+function(Build_Handler_Get_BoardBuild IN_BOARD IN_BUILD_TYPE OUT_MCU OUT_PRESET OUT_DIR)
+
+    if(NOT EXISTS "${BUILD_HANDLER_BOARDS_FILE}")
+        Build_Handler_DetectBoards()
+    endif()
+
+    file(READ "${BUILD_HANDLER_BOARDS_FILE}" BOARDS_CONTENT)
+    string(JSON BOARD_PRESET ERROR_VARIABLE BOARD_ERROR GET "${BOARDS_CONTENT}" boards "${IN_BOARD}" preset)
+
+    if(BOARD_ERROR)
+        message(FATAL_ERROR "Board ${IN_BOARD} is not in ${BUILD_HANDLER_BOARDS_FILE} - detect the connected boards.")
+    endif()
+
+    string(REGEX REPLACE "_IntegrationTest$" "" BOARD_MCU "${BOARD_PRESET}")
+
+    set(${OUT_MCU}    "${BOARD_MCU}"                                                       PARENT_SCOPE)
+    set(${OUT_PRESET} "${BOARD_MCU}_${IN_BUILD_TYPE}"                                      PARENT_SCOPE)
+    set(${OUT_DIR}    "${BUILD_HANDLER_BUILD_DIR}/${BOARD_MCU}_${IN_BUILD_TYPE}_${IN_BOARD}" PARENT_SCOPE)
+endfunction()
+
+
+# ------------------------------------------------------------------------------
+# Function: Build_Handler_BuildBoard
+# Description: Configures and builds the project for a board (Debug / Release): the preset of its MCU in a
+#              build folder of the board with its configuration (TARGET_BOARD - fixture and own defines of
+#              ItBoards.json, Build.cmake).
+#
+# IN_BOARD      [in]: Board name (boards file of the detection).
+# IN_BUILD_TYPE [in]: Debug or Release.
+# ------------------------------------------------------------------------------
+function(Build_Handler_BuildBoard IN_BOARD IN_BUILD_TYPE)
+
+    if(NOT "${IN_BUILD_TYPE}" MATCHES "^(Debug|Release)$")
+        message(FATAL_ERROR "Required BUILD_TYPE '${IN_BUILD_TYPE}' is not correct (Debug, Release).")
+    endif()
+
+    # A target <board>@<host>:<probe> of the board lists selects its board
+    string(REGEX REPLACE "@.*$" "" IN_BOARD "${IN_BOARD}")
+
+    Build_Handler_Get_BoardBuild("${IN_BOARD}" "${IN_BUILD_TYPE}" MCU PRESET BOARD_DIR)
+
+    set(FRESH_ARG "")
+    set(CLEAN_ARG "")
+
+    if(BUILD_CLEAN)
+        set(FRESH_ARG --fresh)
+        set(CLEAN_ARG --clean-first)
+    endif()
+
+    message("=====================================")
+    message("Configuration: ${PRESET} of board ${IN_BOARD} ${FRESH_ARG}")
+    message("=====================================")
+    Build_Handler_Execute("Configuration of ${PRESET} of board ${IN_BOARD}"
+                          "${CMAKE_COMMAND}"
+                          --preset
+                          ${PRESET}
+                          -B
+                          "${BOARD_DIR}"
+                          "-DTARGET_BOARD=${IN_BOARD}"
+                          "-DTARGET_BOARDS_FILE=${BUILD_HANDLER_BOARDS_FILE}"
+                          ${FRESH_ARG})
+
+    message("=====================================")
+    message("Build: ${PRESET} of board ${IN_BOARD} ${CLEAN_ARG}")
+    message("=====================================")
+    Build_Handler_Execute("Build of ${PRESET} of board ${IN_BOARD}" "${CMAKE_COMMAND}" --build "${BOARD_DIR}" ${CLEAN_ARG})
+
+    message("=====================================")
+    message("Build ${PRESET} of board ${IN_BOARD} PASSED")
+    message("Output: ${BOARD_DIR}")
+    message("=====================================")
+endfunction()
+
+
+# ------------------------------------------------------------------------------
 # Function: Build_Handler_Docs
 # Description: Generates Doxygen documentation of the project for selected MCU
 #              (Debug preset configured with DOXYGEN_ENABLED=ON to its own build
@@ -727,23 +836,18 @@ function(Build_Handler_PrintTestTargetList IN_TEST_TYPE)
     elseif("${IN_TEST_TYPE}" STREQUAL "IT")
 
         Build_Handler_DetectBoards()
-        Build_Handler_GetBoardList(BOARD_LIST PRESET_LIST)
 
-        file(READ "${BUILD_HANDLER_BOARDS_FILE}" BOARDS_CONTENT)
+        # One item per physical board (probe) of this machine and of the IT agents
+        IntegrationTesting_ReadTargets(TARGETS_CNT "${BUILD_HANDLER_BOARDS_FILE}")
 
         set(ITEMS "")
 
-        foreach(BOARD PRESET IN ZIP_LISTS BOARD_LIST PRESET_LIST)
-            string(JSON PROBES_CNT ERROR_VARIABLE PROBES_ERROR LENGTH "${BOARDS_CONTENT}" boards ${BOARD} probes)
-            if(PROBES_ERROR)
-                set(PROBES_CNT 0)
-            endif()
-            if(PROBES_CNT EQUAL 1)
-                list(APPEND ITEMS "${BOARD} (${PRESET}, 1 probe)")
-            else()
-                list(APPEND ITEMS "${BOARD} (${PRESET}, ${PROBES_CNT} probes)")
-            endif()
-        endforeach()
+        if(TARGETS_CNT GREATER 0)
+            math(EXPR TARGETS_LAST "${TARGETS_CNT} - 1")
+            foreach(TARGET_IDX RANGE ${TARGETS_LAST})
+                list(APPEND ITEMS "${IT_TARGET_${TARGET_IDX}_TEXT} (${IT_TARGET_${TARGET_IDX}_PRESET})")
+            endforeach()
+        endif()
 
         if(ITEMS)
             list(APPEND ITEMS "${BUILD_HANDLER_ALL_BOARDS_TEXT}")
@@ -993,11 +1097,12 @@ endfunction()
 # ------------------------------------------------------------------------------
 # Function: Build_Handler_GetTestTargetId
 # Description: Numerical ID of the test target selected by name - MCU (UT) or
-#              connected board (IT, boards are detected first), name
-#              BUILD_HANDLER_ALL_BOARDS_TEXT selects all connected boards.
+#              connected physical board (IT, boards are detected first: ID
+#              <board>@<host>:<probe> or the name of a board with one physical
+#              board), name BUILD_HANDLER_ALL_BOARDS_TEXT selects all connected boards.
 #
 # IN_TEST_TYPE [in]:  UT or IT.
-# IN_TARGET    [in]:  Name of the MCU / board.
+# IN_TARGET    [in]:  Name of the MCU / ID of the physical board.
 # OUT_ID       [out]: Numerical ID of the MCU / board.
 # ------------------------------------------------------------------------------
 function(Build_Handler_GetTestTargetId IN_TEST_TYPE IN_TARGET OUT_ID)
@@ -1010,17 +1115,21 @@ function(Build_Handler_GetTestTargetId IN_TEST_TYPE IN_TARGET OUT_ID)
     elseif("${IN_TEST_TYPE}" STREQUAL "IT")
 
         Build_Handler_DetectBoards()
-        Build_Handler_GetBoardList(BOARD_LIST PRESET_LIST)
+        IntegrationTesting_ReadTargets(TARGETS_CNT "${BUILD_HANDLER_BOARDS_FILE}")
 
-        if(NOT BOARD_LIST)
+        if(TARGETS_CNT EQUAL 0)
             message(FATAL_ERROR "No connected board detected.")
         endif()
 
+        # ID of a physical board (<board>@<host>:<probe>) or name of a board with one physical board
         if("${IN_TARGET}" STREQUAL "${BUILD_HANDLER_ALL_BOARDS_TEXT}")
-            list(LENGTH BOARD_LIST BOARDS_CNT)
-            math(EXPR TARGET_ID "${BOARDS_CNT} + 1")
+            math(EXPR TARGET_ID "${TARGETS_CNT} + 1")
         else()
-            Build_Handler_GetListId("${BOARD_LIST}" "${IN_TARGET}" "connected board" TARGET_ID)
+            IntegrationTesting_FindTarget(TARGET_IDX ${TARGETS_CNT} "${IN_TARGET}")
+            if(TARGET_IDX EQUAL -1)
+                message(FATAL_ERROR "Required connected board '${IN_TARGET}' not found.")
+            endif()
+            math(EXPR TARGET_ID "${TARGET_IDX} + 1")
         endif()
 
     else()
@@ -1040,7 +1149,7 @@ endfunction()
 #              TEST_RUN).
 #
 # IN_TEST_TYPE [in]: UT or IT.
-# IN_TARGET    [in]: Name of the MCU (UT), connected board or
+# IN_TARGET    [in]: Name of the MCU (UT), ID of a connected physical board or
 #                    BUILD_HANDLER_ALL_BOARDS_TEXT (IT).
 # IN_TEST_SET  [in]: Name of the test set, empty = all test sets.
 # ------------------------------------------------------------------------------
@@ -1077,6 +1186,7 @@ endfunction()
 # cmake -DFUNCTION_ID="BUILD"       -DMCU_ID=3 -DBUILD_TYPE=Debug         -P Build_Handler.cmake : Configure and build MCU 3 (Debug / Release)
 # cmake -DFUNCTION_ID="DOCS"        -DMCU_ID=3                            -P Build_Handler.cmake : Generate Doxygen documentation of MCU 3 (MCU=<name> by name)
 # cmake -DFUNCTION_ID="TEST_TARGET_LIST" -DTEST_TYPE=UT                   -P Build_Handler.cmake : List MCUs (UT) or boards (IT)
+# cmake -DFUNCTION_ID="DETECT_BOARDS"                                    -P Build_Handler.cmake : Detect connected boards (IT), no numbered list
 # cmake -DFUNCTION_ID="TEST_BUILD"  -DTEST_TYPE=IT -DTARGET_ID=1          -P Build_Handler.cmake : Configure and build tests of board 1, list test sets
 # cmake -DFUNCTION_ID="TEST_RUN"    -DTEST_TYPE=IT -DTARGET_ID=1 -DTEST_ID=0 -P Build_Handler.cmake : Execute all test sets (0) of board 1, summary
 # cmake -DFUNCTION_ID="TEST_BUILD"  -DTEST_TYPE=IT -DTARGET_ID=<boards+1>  -P Build_Handler.cmake : Configure presets of all boards, list test sets
@@ -1086,8 +1196,10 @@ endfunction()
 #
 # Selection by name (VSCode tasks), -DBUILD_CLEAN=ON for clean build (BUILD, TEST, TEST_BUILD):
 # cmake -DFUNCTION_ID="BUILD"       -DMCU=STM32F407xG -DBUILD_TYPE=Debug  -P Build_Handler.cmake : Configure and build MCU STM32F407xG
+# cmake -DFUNCTION_ID="BUILD"       -DBOARD=STM32H503xB -DBUILD_TYPE=Debug -P Build_Handler.cmake : Build of a board (its configuration, Build/<MCU>_Debug_<board>)
 # cmake -DFUNCTION_ID="TEST"        -DTEST_TYPE=UT -DTARGET=STM32F407xG -DTEST_SET=Gpio -P Build_Handler.cmake : Build and execute test set Gpio (empty = all)
 # cmake -DFUNCTION_ID="TEST"        -DTEST_TYPE=IT -DTARGET="All connected boards" -P Build_Handler.cmake : Detect boards, build and execute all test sets on all boards
+# cmake -DFUNCTION_ID="TEST"        -DTEST_TYPE=IT -DTARGET="STM32H503xB@TestAgent:0483:374e:<SN>" -DTEST_SET=Gpio -P Build_Handler.cmake : Test set Gpio on the board of the IT agent TestAgent
 #==============================================================================#
 if(CMAKE_SCRIPT_MODE_FILE AND
    CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
@@ -1095,6 +1207,11 @@ if(CMAKE_SCRIPT_MODE_FILE AND
     if("${FUNCTION_ID}" STREQUAL "MCU_LIST")
 
         Build_Handler_PrintMcuList()
+
+    elseif("${FUNCTION_ID}" STREQUAL "BUILD" AND
+           NOT "${BOARD}" STREQUAL "")
+
+        Build_Handler_BuildBoard("${BOARD}" "${BUILD_TYPE}")
 
     elseif("${FUNCTION_ID}" STREQUAL "BUILD")
 
@@ -1121,6 +1238,10 @@ if(CMAKE_SCRIPT_MODE_FILE AND
     elseif("${FUNCTION_ID}" STREQUAL "TEST_TARGET_LIST")
 
         Build_Handler_PrintTestTargetList("${TEST_TYPE}")
+
+    elseif("${FUNCTION_ID}" STREQUAL "DETECT_BOARDS")
+
+        Build_Handler_DetectBoards()
 
     elseif("${FUNCTION_ID}" STREQUAL "TEST_COVERAGE")
 

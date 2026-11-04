@@ -33,6 +33,7 @@
 #include "IntegrationTesting_Target.h"      /* Target interface (test set)    */
 #include "unity.h"                          /* Unity testing framework        */
 #include "stdatomic.h"                      /* Memory barriers                */
+#include "stddef.h"                         /* offsetof                       */
 #if defined(IT_COVERAGE)
 #include "IntegrationTesting_Coverage.h"    /* Code coverage (gcov)           */
 #endif
@@ -46,6 +47,7 @@ static void integrationTesting_CheckInterrupted ( void );
 static void integrationTesting_RunCase          ( void );
 static void integrationTesting_NextCase         ( void );
 static void integrationTesting_Reset            ( void );
+static void integrationTesting_MailboxFlush     ( void );
 static void integrationTesting_Finish           ( void );
 static void integrationTesting_PutCaseFail      ( void );
 static void integrationTesting_PutLineStart     ( void );
@@ -53,6 +55,7 @@ static void integrationTesting_PutString        ( const char* text );
 static void integrationTesting_PutDec           ( uint32_t value );
 static void integrationTesting_PutHex           ( uint32_t value );
 static void integrationTesting_Idle             ( void );
+static void integrationTesting_WaitHostAttach   ( void );
 
 /* ========================= SYMBOLIC CONSTANTS ============================= */
 
@@ -74,6 +77,37 @@ static void integrationTesting_Idle             ( void );
 /** Test function name used for failures outside of any test case */
 #define IT_CORE_NAME                        "IntegrationTesting"
 
+/** Size of the widest ECC word of a RAM [B] (64-bit ECC word of STM32H7 AXI SRAM) - alignment of the mailbox */
+#define IT_RAM_ECC_WORD_SIZE                ( 8u )
+
+/** Comparator 0 of the Flash Patch and Breakpoint unit (FP_COMP0, ARMv7-M / ARMv8-M) - attach mark of the
+ *  probe: the probe (probe-rs) halts the core, clears every hardware breakpoint and resumes the core on its attach */
+#define IT_FPB_COMP0_ADDR                   ( 0xE0002008u )
+
+/** Value of FP_COMP0 marking "no attach yet" - an address with the enable bit (bit 0) cleared, never a breakpoint */
+#define IT_FPB_ATTACH_MARK                  ( 0x00000004u )
+
+/** Software lock access register of the FPB (FP_LAR) and its unlock key - Cortex-M7 ignores the writes of software
+ *  into the FPB until it is unlocked (the debugger is not locked) */
+#define IT_FPB_LAR_ADDR                     ( 0xE0002FB0u )
+#define IT_FPB_LAR_UNLOCK_KEY               ( 0xC5ACCE55u )
+
+/** CPUID register of the core, its part number field and the part number of Cortex-M7 (the core with FP_LAR) */
+#define IT_CPUID_ADDR                       ( 0xE000ED00u )
+#define IT_CPUID_PARTNO_MASK                ( 0x0000FFF0u )
+#define IT_CPUID_PARTNO_CORTEX_M7           ( 0x0000C270u )
+
+/** Longest wait for the attach of the probe [loop passes] (several seconds at the reset clock, then the test case
+ *  is executed anyway - a probe that does not clear the breakpoints must not block the session) */
+#define IT_ATTACH_WAIT_LOOPS                ( 100000000u )
+
+/** Passes without another attach after the last one at the start of a session or after an abort [loop passes]
+ *  (about 1 s at the reset clock: the session start and the abort use more probe sessions in a row) */
+#define IT_ATTACH_QUIET_LOOPS               ( 8000000u )
+
+/** Count of ECC words of \ref IT_RAM_ECC_WORD_SIZE of the mailbox header (the header is 12 words - 6 ECC words) */
+#define IT_MAILBOX_HEADER_ECC_WORDS         ( offsetof( integrationTesting_Mailbox_t, Output ) / IT_RAM_ECC_WORD_SIZE )
+
 /* ============================== MACROS ==================================== */
 
 /* ========================= EXPORTED VARIABLES ============================= */
@@ -82,10 +116,14 @@ static void integrationTesting_Idle             ( void );
  * Result mailbox read by host. Located in ".noinit" - not initialized by the
  * startup code, content is kept over system reset between the test cases.
  */
-__attribute__((section(".noinit")))
+__attribute__((section(".noinit"), aligned(IT_RAM_ECC_WORD_SIZE)))
 integrationTesting_Mailbox_t integrationTesting_Mailbox;
 
 /* ========================== LOCAL VARIABLES =============================== */
+
+/** More probe sessions in a row before the test case (session start, abort): \ref integrationTesting_WaitHostAttach
+ *  waits until the attaches stop */
+static uint32_t integrationTesting_AttachSettle;
 
 /* ======================== EXPORTED FUNCTIONS ============================== */
 
@@ -116,12 +154,17 @@ void IntegrationTesting_Run( void )
     const integrationTesting_State_t state = integrationTesting_Mailbox.State;
     const uint32_t                   index = integrationTesting_Mailbox.TestIndex;
 
+    /* Progress for the probe trace of the host (the test case of this boot, the count when finished) */
+    integrationTesting_Mailbox.Progress = ( IT_PROGRESS_MARK | index );
+
     if( IT_STATE_RUNNING != state )
     {
         /* Tests are finished, reset of MCU (debugger, button) keeps the results */
     }
     else if( integrationTesting_TestCount > index )
     {
+        integrationTesting_WaitHostAttach();
+
         integrationTesting_RunCase();
 
         integrationTesting_Reset();
@@ -265,6 +308,9 @@ integrationTesting_Stage_t IntegrationTesting_Get_Stage( void )
 void IntegrationTesting_Set_ResetExpected( void )
 {
     integrationTesting_Mailbox.CasePhase = IT_CASE_RESET_EXPECTED;
+
+    /* The mark has to survive the reset of the test case */
+    integrationTesting_MailboxFlush();
 }
 
 /* ========================== LOCAL FUNCTIONS =============================== */
@@ -284,6 +330,13 @@ static void integrationTesting_MailboxOpen( void )
     if( IT_MAILBOX_MAGIC == magic )
     {
         /* Session continues after reset */
+    }
+    else if( ( IT_MAILBOX_START == magic                            ) &&
+             ( IT_STATE_TRACE   == integrationTesting_Mailbox.State )    )
+    {
+        integrationTesting_MailboxInit( IT_SESSION_HOST_TRACE );
+
+        integrationTesting_AttachSettle = 1u;
     }
     else if( IT_MAILBOX_START == magic )
     {
@@ -347,6 +400,9 @@ static void integrationTesting_CheckInterrupted( void )
 
         integrationTesting_Mailbox.Failures++;
         integrationTesting_NextCase();
+
+        /* The abort uses more probe sessions in a row (write, reset) */
+        integrationTesting_AttachSettle = 1u;
     }
     else if( IT_CASE_RESET_EXPECTED == casePhase )
     {
@@ -421,7 +477,52 @@ static void integrationTesting_Reset( void )
     /* Mailbox is written before the reset */
     atomic_thread_fence( memory_order_seq_cst );
 
+    integrationTesting_MailboxFlush();
+
     ItTarget_SystemReset();
+}
+
+
+/**
+ * \brief Completes the writes of the mailbox in the RAM before a reset of the MCU.
+ *
+ * RAM with ECC per 64-bit word (STM32H7 AXI SRAM, RM0468 "Error code correction": a write narrower than the
+ * ECC word is not really written to the SRAM when a reset occurs): TestIndex was lost over the reset between the
+ * test cases on STM32H723 (32-bit writes, also when written twice). Every ECC word of the header and the ECC word
+ * with the end of the output are written again with their own value by one 64-bit access each (a complete ECC
+ * word). Layout and content of the mailbox are unchanged (host interface); on a RAM without this behavior the
+ * words are only written again.
+ */
+static void integrationTesting_MailboxFlush( void )
+{
+    volatile uint64_t * const mailboxEccWords = (volatile uint64_t *)&integrationTesting_Mailbox;
+    const uint32_t            outputLength    = integrationTesting_Mailbox.Length;
+    uint32_t                  outputEccWord   = 0u;
+
+    atomic_thread_fence( memory_order_seq_cst );
+
+    for( uint32_t eccWordIdx = 0u; IT_MAILBOX_HEADER_ECC_WORDS > eccWordIdx; eccWordIdx++ )
+    {
+        const uint64_t value = mailboxEccWords[ eccWordIdx ];
+
+        mailboxEccWords[ eccWordIdx ] = value;
+    }
+
+    if( 0u < outputLength )
+    {
+        /* ECC word with the last character of the output (Output starts at an ECC word boundary) */
+        outputEccWord = ( ( outputLength - 1u ) / IT_RAM_ECC_WORD_SIZE ) + IT_MAILBOX_HEADER_ECC_WORDS;
+
+        const uint64_t value = mailboxEccWords[ outputEccWord ];
+
+        mailboxEccWords[ outputEccWord ] = value;
+    }
+    else
+    {
+        /* No output yet */
+    }
+
+    atomic_thread_fence( memory_order_seq_cst );
 }
 
 
@@ -459,6 +560,9 @@ static void integrationTesting_Finish( void )
     atomic_thread_fence( memory_order_seq_cst );
 
     integrationTesting_Mailbox.State = IT_STATE_FINISHED;
+
+    /* Results are kept over a later reset (debugger, button) */
+    integrationTesting_MailboxFlush();
 }
 
 
@@ -565,6 +669,89 @@ static void integrationTesting_PutHex( uint32_t value )
 
         IntegrationTesting_PutChar( hexDigitLut[ digit ] );
     }
+}
+
+
+/**
+ * \brief Waits for the attach of the probe before a test case of a session polled by probe trace (AB#2247).
+ *
+ * The host reads the mailbox by one probe session (probe-rs trace) per boot: the session reads the memory without
+ * halting the core, but its attach halts the core for about 30 ms (breakpoints are cleared) and the reset at the
+ * end of a test case ends it. A test case started before the attach is halted in the middle (a transfer loses
+ * data). The firmware marks FP_COMP0 and waits until the attach clears it; at the start of the session and after
+ * an abort (more probe sessions in a row) it waits until no attach follows for \ref IT_ATTACH_QUIET_LOOPS.
+ * Other sessions (host without trace, debugger, local) do not wait. Cortex-M7 needs the FPB unlocked for the write
+ * of the mark (FP_LAR); a core where the mark is not kept (no FPB, locked) does not wait either.
+ */
+static void integrationTesting_WaitHostAttach( void )
+{
+    volatile uint32_t * const fpComp0 = (volatile uint32_t *)IT_FPB_COMP0_ADDR;
+    uint32_t                  attachCnt = 0u;
+    uint32_t                  quietCnt  = 0u;
+
+    const uint32_t            cpuPart   = ( *(volatile const uint32_t *)IT_CPUID_ADDR & IT_CPUID_PARTNO_MASK );
+
+    if( IT_CPUID_PARTNO_CORTEX_M7 == cpuPart )
+    {
+        /* Cortex-M7: software lock of the FPB */
+        *(volatile uint32_t *)IT_FPB_LAR_ADDR = IT_FPB_LAR_UNLOCK_KEY;
+    }
+    else
+    {
+        /* Core without the software lock of the FPB */
+    }
+
+    if( IT_SESSION_HOST_TRACE == integrationTesting_Mailbox.Session )
+    {
+        *fpComp0 = IT_FPB_ATTACH_MARK;
+    }
+    else
+    {
+        /* Session without probe trace */
+    }
+
+    const uint32_t markKept = *fpComp0;
+
+    if( ( IT_SESSION_HOST_TRACE == integrationTesting_Mailbox.Session ) &&
+        ( IT_FPB_ATTACH_MARK    == markKept                           )    )
+    {
+        for( uint32_t loopIdx = 0u; IT_ATTACH_WAIT_LOOPS > loopIdx; loopIdx++ )
+        {
+            const uint32_t comp0 = *fpComp0;
+
+            if( IT_FPB_ATTACH_MARK != comp0 )
+            {
+                /* Attach of the probe - the mark is set again for a next attach */
+                attachCnt++;
+                quietCnt = 0u;
+                *fpComp0 = IT_FPB_ATTACH_MARK;
+            }
+            else if( 0u == attachCnt )
+            {
+                /* No attach yet */
+            }
+            else if( 0u == integrationTesting_AttachSettle )
+            {
+                /* One attach before an ordinary test case */
+                break;
+            }
+            else if( IT_ATTACH_QUIET_LOOPS > quietCnt )
+            {
+                quietCnt++;
+            }
+            else
+            {
+                /* No attach after the last one for the quiet time */
+                break;
+            }
+        }
+    }
+    else
+    {
+        /* Session without probe trace, or the mark is not kept by FP_COMP0 */
+    }
+
+    integrationTesting_AttachSettle = 0u;
 }
 
 

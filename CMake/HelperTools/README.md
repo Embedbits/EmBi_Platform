@@ -139,7 +139,13 @@ Direct call (from `EmBi_Platform` folder):
 ```bash
 cmake -DFUNCTION_ID=MCU_LIST                          -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
 cmake -DFUNCTION_ID=BUILD -DMCU_ID=8 -DBUILD_TYPE=Release -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
+cmake -DFUNCTION_ID=BUILD -DBOARD=STM32H503xB -DBUILD_TYPE=Debug -P CMake/HelperTools/Build_Handler/Build_Handler.cmake
 ```
+
+`BOARD` (a board name of the detection or a target `<board>@<host>:<probe>` of the board lists) builds the preset of
+the MCU of the board in the build folder of the board `Build/<MCU>_<Debug|Release>_<board>` with the configuration
+of the board (`TARGET_BOARD`: fixture `IT_FIXTURE` / `IT_FEATURE_<X>` and the own `defines` of `ItBoards.json`,
+`CMake/IntegrationTesting/README.md`, *Board fixtures*).
 
 ---
 
@@ -149,10 +155,13 @@ This option builds and executes unit tests (host) or integration tests (board):
 
 1. Test type - `Unit tests` or `Integration tests`.
 2. Target - MCU of the project presets (unit tests, preset `<MCU>_UnitTest`) or connected board
-   (integration tests - boards are detected before the list is printed, MCU of every probe identified
-   by `Bsp/Ral/RalPresets.json`, optional `IntegrationTestBoards.json` of the project as override,
-   stored in `Build/IntegrationTestBoards.json`; preset of the board configured with
-   `INTEGRATION_TEST_BOARD=<board>`, see `CMake/IntegrationTesting/README.md`) or all connected boards.
+   (integration tests - boards of this machine and of the IT agents of `ItHosts.json` are detected
+   before the list is printed, MCU of every probe identified by `Bsp/Ral/RalPresets.json`, optional
+   `IntegrationTestBoards.json` of the project as override, stored in `Build/IntegrationTestBoards.json`;
+   one item per physical board `<board> - <name of the board> [@ <IT agent>]`, the preset of its board
+   configured with `INTEGRATION_TEST_BOARD=<board>`, `INTEGRATION_TEST_PROBE=<its probe>` and
+   `INTEGRATION_TEST_HOST=<its IT agent>` - the firmware of a board of an IT agent is executed there,
+   see `CMake/IntegrationTesting/README.md`) or all connected boards.
 3. The preset is configured and built, test sets of the build (CTest labels = names of the test
    sets, eg. `Gpio`, `ModBus_Crc`) are listed.
 4. One test set or all of them (`0`) are executed (`ctest --preset <preset> -L ^<TestSet>$`).
@@ -183,8 +192,8 @@ cmake -DFUNCTION_ID=TEST_RUN         -DTEST_TYPE=UT -DTARGET_ID=8 -DTEST_ID=0 -P
 Integration tests on all connected boards - the last entry of the boards list (`All connected boards`):
 presets of all detected boards are only configured to list their test sets, the execution is done by
 `CMake/IntegrationTesting/IntegrationTesting_AllBoards.cmake` (connected boards are detected again,
-built and tested, `IT_LABEL` = selected test set). Results are printed per probe from
-`Build/<preset>/IntegrationTestResults_<sn>.xml`.
+built and tested, `IT_LABEL` = selected test set; the boards of the IT agents too). Results are printed per
+probe from `Build/<preset>/IntegrationTestResults_<sn>.xml` (`IntegrationTestResults_<host>_<sn>.xml` of an IT agent).
 
 ---
 
@@ -239,6 +248,11 @@ The project structure (`ArtifactsConfig.txt`, `CMakeLists.txt`, `CMakePresets.js
 initialized at the beginning of *BSP module - Configuration* (`Prj_Handler.cmake`, `App_ModuleHandler.cmake`), before
 the BSP itself is composed. Already existing files are kept.
 
+*Middleware module - Configuration / Update version* asks for the project first when the platform root folder has more
+projects (projects of the cores of a multi-core MCU, `FUNCTION_ID=PROJECT_LIST` of `Mw_ModuleHandler.cmake`): the
+middleware goes to `<project>/Middlewares` (`-DPROJECT_ID`), its submodule is registered in the repository of the
+platform root folder. A project root with one project is not asked.
+
 ---
 
 ### VSCode project initialization
@@ -256,8 +270,8 @@ name is kept). The name is written to `set(PROJECT_NAME ...)` of the root `CMake
 
 ```
 .vscode/
-├─ tasks.json                    - Build, clean rebuild, flash, unit tests, integration tests, board detection, Setup
-├─ launch.json                   - probe-rs debugging (firmware, attach, integration test firmware), unit tests (gdb)
+├─ tasks.json                    - Build, clean rebuild, flash, unit tests, integration tests, board detection, serial monitor of a board of an IT agent, Setup
+├─ launch.json                   - probe-rs debugging (firmware, attach, integration test firmware, picked board of this machine or of an IT agent), unit tests (gdb)
 ├─ settings.json                 - CMake Tools with presets, IntelliSense, excludes (other settings are kept)
 ├─ c_cpp_properties.json         - IntelliSense configuration provided by CMake Tools
 └─ extensions.json               - Recommended extensions (CMake Tools, C/C++, probe-rs Debugger, Serial Monitor)
@@ -270,10 +284,12 @@ execute `Build_Handler.cmake` - the same flow as the menu options *Build* and *T
 |------|-------------|
 | `EmBi: Build` | Configuration and build of `<MCU>_<Debug/Release>` (default build task) |
 | `EmBi: Clean rebuild` | Configuration without CMake cache (`--fresh`), build `--clean-first` |
-| `EmBi: Flash` | Build, flashing by probe-rs to the connected board with the MCU, reset |
+| `EmBi: Build for board` | Build of a picked board (Debug / Release) in its build folder `Build/<MCU>_<type>_<board>` with its configuration (fixture, own defines) |
+| `EmBi: Flash` | Build of a picked board (its MCU and configuration, as *Build for board*), flashing by probe-rs and reset - a board of this machine under the probe lock, a board of an IT agent through its agent tools (`embi-agent flash`) |
 | `EmBi: Unit tests` | Build of `<MCU>_UnitTest`, execution of a test set (empty = all), summary (default test task) |
-| `EmBi: Integration tests` | Detection of boards, build and execution on the board (or all connected boards), summary |
-| `EmBi: Detect connected boards` | Boards connected to debug probes (`Build/IntegrationTestBoards.json`) |
+| `EmBi: Integration tests` | Detection of boards (this machine and IT agents of `ItHosts.json`), build and execution on the picked physical board - local or on its IT agent - (or all connected boards), summary |
+| `EmBi: Detect connected boards` | Detection of the boards of this machine and of all IT agents of `ItHosts.json` (`Build/IntegrationTestBoards.json`, read by the board pickers of the other tasks), printed without the numbered list of the menu (`FUNCTION_ID=DETECT_BOARDS`) |
+| `EmBi: Serial monitor on board` | The virtual COM port of a picked board of an IT agent (and the baud rate) on `127.0.0.1:<port>` of this machine for the Serial Monitor in TCP mode, until the task is terminated (below) |
 | `EmBi: Setup` | This menu in the VSCode terminal |
 
 Debug configurations of every selected MCU (debug adapter of the probe-rs extension, `probe-rs dap-server`):
@@ -285,9 +301,52 @@ Debug configurations of every selected MCU (debug adapter of the probe-rs extens
 - `EmBi: Debug unit test <MCU>` - host gdb (gcc artifact) debugging of a unit test executable (built by the task
   *Unit tests*)
 
+Debug configurations of a picked board - a board of this machine or of an IT agent of `ItHosts.json` (see
+`IntegrationTesting/README.md`, *Boards of IT agents*), picked from the connected boards (detected when the
+configuration is started, one entry per physical board: `<board> - <name of the board>`, host):
+
+- `EmBi: Debug on board` - builds the Debug firmware of the board (`Build/<MCU>_Debug_<board>`, its fixture and own defines), flashes and runs it
+- `EmBi: Debug integration test on board` - flashes an integration test firmware of the MCU of the board selected
+  from the list (built by the task *Integration tests*)
+
+The configuration is the same for a local board and for a board of an IT agent (F5, breakpoints, registers, RTT):
+
+1. The hidden `preLaunchTask` (`EmBi: Prepare debugging on board`, background task, `Prj_VSCode_ProbeRs.cmake`
+   `DEBUG_SERVE`) builds the firmware and starts the debug server of the probe of the board - here, or on the IT
+   agent over `ssh -tt -L <port>:127.0.0.1:<port of the agent>` (the host scripts are copied to `/tmp/embi-<random>` of
+   the agent and removed after the session; the agent uses its probe-rs in the version of this machine).
+2. The debug server locks the probe for the whole session (`IntegrationTesting_Lock.cmake`): a board used by another
+   client (a job of the integration test pipeline, tests) is not debugged - the task ends with the holder of the board.
+   A pipeline job waits for a board being debugged.
+3. VS Code connects when the server prints `EmBi: debug server listening on port <port>`; the probe-rs extension
+   sends the firmware and the SVD file to the server (`remoteServerMode`), the server needs no file of this machine.
+4. The session ends the server (one session, `--single-session`), the SSH connection and the task; a broken SSH
+   connection ends the server on the agent too (`-tt`), the lock is released by the operating system.
+
+The probe of the picked board is given (`probe`), so two boards of one MCU are told apart. The ports are given by the
+board (`127.0.0.1:30000-39999` of this machine without the excluded port ranges of Windows, `40000-49999` of the agent).
+The Debug and IntegrationTest builds on Windows record the source paths with the drive letter in lower case
+(`-fdebug-prefix-map`, `Build.cmake`) - VS Code sends the paths of breakpoints so and the debug server of a Linux agent
+compares them case sensitively.
+
 probe-rs configurations have RTT enabled - RTT channels of the firmware (SEGGER RTT control block) are shown in the
 terminal of the debug session. Firmware output over ST-LINK VCP (USART) is read by the recommended Serial Monitor
-extension.
+extension - the VCP of a board of this machine is a serial port of this machine, the VCP of a board of an IT agent is
+opened by the task `EmBi: Serial monitor on board`:
+
+1. The task asks for the board (boards of the IT agents, detected now, `PICK_SERIAL_BOARD`) and the baud rate and starts
+   the serial server of the agent tools (`embi-agent serial-server`, see `IntegrationTesting/README.md`, *IT agent
+   interface*) behind `ssh -tt -L <port>:127.0.0.1:<port of the agent>` (`SERIAL_SERVE`). It prints the port:
+   `EmBi: Serial Monitor - Monitor Mode TCP, Host 127.0.0.1, Port <port>, Start Monitoring`.
+2. In the Serial Monitor panel: *Monitor Mode* `TCP`, *Host* `127.0.0.1`, *Port* `<port>`, *Start Monitoring*. The
+   output of the board is shown, a sent text goes to the board. Stop / start of the monitor reconnects (one client at
+   a time); the output of the board without a connected monitor is dropped.
+3. The probe is not locked - the board is debugged (`EmBi: Debug on board`) and tested while the monitor is open. One
+   serial monitor per board: a second one (another machine) ends with the holder of the first one.
+4. Terminating the task closes the port: the SSH connection ends and the serial server of the agent with it.
+
+The ports are given by the board (`127.0.0.1:20000-29999` of this machine without the excluded port ranges of
+Windows, `50000-59999` of the agent), so the Serial Monitor keeps the port of a board.
 
 The probe is not written to `launch.json` (it is selected by the debug adapter). `launch.json` contains no path of
 probe-rs: the probe-rs configurations start the debug adapter through CMake (`"runtimeExecutable": "cmake"`,
@@ -304,13 +363,17 @@ the task or the debug configuration is started (extension *Tasks Shell Input*, `
 | Function (`-DFUNCTION_ID=`) | Used by | Output |
 |-----------------------------|---------|--------|
 | `PICK_MCU` | tasks | MCUs of the project presets |
-| `PICK_BOARD` | tasks | boards of the project boards file, boards named by MCU, all connected boards |
+| `PICK_BOARD` | tasks | connected boards of this machine and of the IT agents (detected now, one option per physical board, value = ID `<board>@<host>:<probe>`), all connected boards; no board: no option, the error of the input names the IT agents whose detection failed (`failed` of `Build/IntegrationTestBoards.json`) - also of `PICK_DEBUG_BOARD` and `PICK_SERIAL_BOARD` |
 | `PICK_TEST_SET` (`-DTEST_TYPE=UT/IT`) | tasks | test sets = names of the tests registered in the project (the first option = all) |
-| `DEBUG_CHIP` (`-DMCU=`) | debug | probe-rs chip: board chip of `IntegrationTestBoards.json`, device of the MCU identification of `Bsp/Ral/RalPresets.json` or the MCU name (the first one probe-rs knows if the artifact is in the cache, otherwise the first defined) |
+| `DEBUG_CHIP` (`-DMCU=`) | debug | probe-rs chip: board chip of `ItBoards.json`, device of the MCU identification of `Bsp/Ral/RalPresets.json` or the MCU name (the first one probe-rs knows if the artifact is in the cache, otherwise the first defined) |
 | `DEBUG_SVD` (`-DMCU=`) | debug | SVD file of the MCU (peripheral registers of the debugger, `coreConfigs[].svdFile`) from the Ral module `Svd` of the BSP (`Bsp/Ral/Svd/<Device>.svd`): the file `Bsp/Ral/Svd/Devices.csv` (`Device;Core;File;Pack`, generated by the importer from the pack descriptions of ST) assigns the file to a device, the device is the one of the MCU identification of `Bsp/Ral/RalPresets.json`, otherwise the first device whose name matches the MCU (`x` of the MCU name = any character). No file of the host is used. An MCU without an SVD file (BSP without the module `Svd`, a device ST delivers no SVD file for) prints the expected path with a warning, the debugger runs without the peripheral registers. The row of the core 0 is used (a multi core device, e.g. STM32H745, has a row per core, ordered by the access port) |
 | `DEBUG_FIRMWARE` (`-DMCU=`) | debug | firmware file: build directory of the preset and the firmware name of the root `CMakeLists.txt` (the same file the flash task uses) |
 | `DEBUG_TESTS` (`-DTEST_TYPE=UT/IT -DMCU=`) | debug | test executables of the MCU registered in the project (`Build/<MCU>_<UnitTest|IntegrationTest>`; unit tests need the build of the task *Unit tests*) |
 | `DEBUG_GDB` (`-DMCU=`) | debug | host gdb of the artifact `gdb`, otherwise `gcc`, in the version configured for the unit test preset of the MCU; gdb of the system is not used |
+| `PICK_DEBUG_BOARD` | debug, tasks | connected boards of this machine and of the IT agents (detected now): `<ID>\|<board> - <name>\|<host>`, ID `<board>@<host>:<probe>` (inputs `debugBoard`, `buildBoard`, `flashBoard`) |
+| `DEBUG_BOARD_SERVER` (`-DTARGET=<ID>`) | debug | `127.0.0.1:<port>` of the debug server of the picked board; writes `Build/DebugTarget.cmake` (the board for the `preLaunchTask`) |
+| `DEBUG_BOARD_PROBE`, `_CHIP`, `_SVD`, `_FIRMWARE`, `_TESTS` (`-DTARGET=<ID>`) | debug | probe of the picked board, chip / SVD file / Debug firmware of the board / integration test firmwares of its MCU (as `DEBUG_CHIP`, `DEBUG_SVD`, `DEBUG_FIRMWARE`, `DEBUG_TESTS`) |
+| `PICK_SERIAL_BOARD` | tasks | connected boards of the IT agents (detected now, as `PICK_DEBUG_BOARD` without the boards of this machine) |
 
 The generated configuration uses VSCode extensions (CMake Tools, C/C++, probe-rs Debugger, Serial Monitor and
 *Tasks Shell Input*, without which the tasks and debug configurations with inputs do not start - `shellCommand.execute not
@@ -327,6 +390,89 @@ newest version found in the cache is never used instead of the configured one.
 
 Generated files start with the comment `// Generated by EmBi_Platform Setup ...`. Existing files without it are kept
 as `<file>.bak`. Repeat the initialization after change of the MCUs of the debug configurations.
+
+---
+
+### Projects of the cores of a multi-core MCU
+
+Every core of a multi-core MCU (STM32H745 / H747 / H755 / H757: `CM7`, `CM4`) has its own project, a normal EmBi
+project built once. The projects of the cores are subfolders of the project root folder and share `EmBi_Platform`
+and `Bsp` in it (one version of the startup, Mcal and linker for all cores):
+
+```
+ProjectRoot/
+├─ EmBi_Platform/, Bsp/          - shared by the projects of the cores
+├─ CM7/                          - project of the core (TARGET_CORE "CM7", TARGET_CORES "CM7;CM4")
+│  ├─ CMakeLists.txt               - project CMake file, PLATFORM_ROOT_PATH = parent folder
+│  ├─ CMakePresets.json            - presets of the MCUs with the core, includes ../EmBi_Platform, ../Bsp
+│  ├─ ArtifactsConfig.txt, ItBoards.json, ItHosts.json
+│  ├─ Application/, Middlewares/   - application and middlewares of the core
+│  ├─ Build/, .vscode/
+├─ CM4/                          - project of the core CM4
+└─ ProjectRoot.code-workspace    - VS Code workspace: projects of the cores and the shared Bsp
+```
+
+*VSCode project initialization* (Setup) creates the projects when the MCUs of the project (BSP) include an MCU whose
+Ral preset lists its cores (identification `cores`, `ral-presets.sh` of Bsp_Linker) - after the VS Code configuration
+of the project root, with the cores of the first multi-core MCU:
+
+```
+cmake -DFUNCTION_ID=CORE_PROJECTS -DMCU=STM32H755xI -DMCU_IDS=STM32H755xI -DFIRMWARE_NAME=Fw -P EmBi_Platform/CMake/HelperTools/Prj_Handler/Prj_Handler.cmake
+```
+
+The function creates the subfolder of every core with the files above (the root `ArtifactsConfig.txt`,
+`ItBoards.json`, `ItHosts.json` are copied, existing files are kept), generates the presets and the Application
+layer in it and runs the VSCode project initialization of every project, which writes the workspace: the debug
+configurations of the selected multi-core MCUs (`MCU_IDS` - names or IDs, all MCUs of the core if none of the
+selected MCUs is a multi-core MCU) and the firmware name with the core (`Fw_CM7_<build type>.elf`, empty = kept).
+Open `ProjectRoot.code-workspace` in VS Code - the tasks and debug configurations of every project run in its folder
+(`../EmBi_Platform/...`).
+
+The tasks of the projects of the cores are hidden, the workspace has every task once. *Build*, *Clean rebuild*,
+*Build for board*, *Flash*, *Unit tests* and *Integration tests* ask for the core first - a core or *All cores* (the projects of
+all cores one after another in the order of `TARGET_CORES`, a failed project stops the task; `RUN_CORES` of
+`Prj_VSCode_Handler.cmake` in the project root folder), the other tasks run in the project of the first core. The
+inputs of the project of a core have own task IDs (`<core>_<id>`, Tasks Shell Input searches the inputs of all
+folders of the workspace). The test sets and the test executables of the debug configurations of a project of a core
+include the tests of the shared Bsp (unit tests in `Build/<preset>/UnitTests/External/Bsp`, integration tests in
+`Build/<preset>/Bsp`).
+
+The debug configurations of the project of a core debug its core: probe-rs `coreIndex` and the SVD file of the core
+(row of the core in `Devices.csv` of Ral/Svd) are the index of `TARGET_CORE` in the cores of the MCU (pack order,
+STM32H755: `CM7` 0, `CM4` 1). A debug session flashes and debugs one core - probe-rs uses the first core
+configuration only. The preLaunchTask of the debug configurations of the MCU and of a picked board therefore builds
+the Debug firmware of the projects of the other cores (the same MCU or board) and flashes it first (step *EmBi: Other
+cores \<MCU\>_Debug*, `OTHER_CORES` of `Prj_VSCode_Handler.cmake`; a board of an IT agent is flashed by its agent
+tools) - the `CM4` waits for the `CM7` in the startup.
+
+#### Debugging of all cores at once (*EmBi: Debug all cores \<MCU\>*)
+
+The workspace has an additional debug configuration per MCU with all cores of the projects - one session of the
+extension **cortex-debug** (`marus25.cortex-debug`, recommended by the workspace) with the GDB server of probe-rs
+(`probe-rs gdb`: the cores of one architecture are threads of one GDB server - STM32H755: thread 1 `cm7`, thread 2
+`cm4`). The debug configurations of the projects (probe-rs extension, one core) are not changed.
+
+- preLaunchTask *EmBi: Prepare all cores \<MCU\>_Debug* (background task, `SERVE_ALL_CORES`): the Debug firmware of
+  every core is built and flashed, the option bytes are compared and written, the MCU is reset and the GDB server
+  waits on `127.0.0.1:<port>` (40000 + hash of the MCU, outside of the excluded port ranges of Windows; the only
+  connected probe as the debug configurations of an MCU).
+- The task stops the GDB server and ends when the session disconnects (or when no session connects within 300 s) -
+  the next start builds and flashes again. A GDB server left by a terminated task (`Build/AllCoresGdbServer.pid` of
+  the project of the first core) is stopped by the next start.
+- The session attaches to the running firmware - both cores are halted; the symbols of the firmware of every core
+  are loaded (`symbolFiles`), the SVD file is the one of the first core, gdb is `arm-none-eabi-gdb` of the artifact
+  `gcc-arm-none-eabi`.
+- A breakpoint stops all cores (all-stop of probe-rs); Continue runs all cores, a step runs the selected core only.
+- **RTT is not supported** in this debug configuration (the GDB server of probe-rs has no RTT) - the debug
+  configurations of the projects of the cores show it.
+- Limits of probe-rs 0.32.0: `monitor reset halt` halts one core only (the session therefore attaches after the reset
+  of the preLaunchTask, a new start of the firmware = a new start of the debug configuration); a finished step is
+  reported without its core (GDB takes the selected thread). A board of an IT agent is not supported.
+
+A subfolder of the project root folder with its own `CMakeLists.txt` and `CMakePresets.json` is the project root of
+the scripts (`SysConfig.cmake`): `CMAKE_SOURCE_DIR` of the configuration, the working folder of a script. Bsp, Ral
+presets and SVD files are taken from the platform root folder (`SysConfig_Get_PlatformRootPath`). A project in the
+project root folder (single-core MCU) is unchanged - both folders are the same.
 
 ---
 

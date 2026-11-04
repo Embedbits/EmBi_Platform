@@ -38,15 +38,19 @@
 typedef enum
 {
     IT_STATE_RUNNING  = 0x52554E21u,        /**< Tests are executed ("RUN!")  */
-    IT_STATE_FINISHED = 0x444F4E45u         /**< Tests are finished ("DONE")  */
+    IT_STATE_FINISHED = 0x444F4E45u,        /**< Tests are finished ("DONE")  */
+    IT_STATE_TRACE    = 0x54524345u         /**< Written by host with \ref IT_MAILBOX_START: the host polls the
+                                                 mailbox by one probe session per boot ("TRCE")              */
 }   integrationTesting_State_t;
 
 
 /** \brief Origin of the test session stored in the mailbox */
 typedef enum
 {
-    IT_SESSION_HOST  = 0x484F5354u,         /**< Started by host (\ref IT_MAILBOX_START written before reset) ("HOST") */
-    IT_SESSION_LOCAL = 0x4C4F434Cu          /**< Started without host - power-on, debugger, lost mailbox ("LOCL")      */
+    IT_SESSION_HOST       = 0x484F5354u,    /**< Started by host (\ref IT_MAILBOX_START written before reset) ("HOST") */
+    IT_SESSION_HOST_TRACE = 0x48545243u,    /**< Started by host polling by probe trace (\ref IT_STATE_TRACE): every
+                                                 test case waits for the attach of the probe ("HTRC")              */
+    IT_SESSION_LOCAL      = 0x4C4F434Cu     /**< Started without host - power-on, debugger, lost mailbox ("LOCL")      */
 }   integrationTesting_Session_t;
 
 
@@ -112,6 +116,9 @@ typedef struct
     volatile uint32_t                       Failures;   /**< Count of failed test cases                                     */
     volatile uint32_t                       Ignored;    /**< Count of ignored test cases                                    */
     volatile char                           Output[ IT_OUTPUT_SIZE ]; /**< Unity output (text)                                */
+    volatile uint32_t                       Progress;   /**< \ref IT_PROGRESS_MARK | TestIndex, written at every boot - the
+                                                             word of the probe trace of the host (after Output, the
+                                                             header layout stays)                                    */
 }   integrationTesting_Mailbox_t;
 
 /* ========================= SYMBOLIC CONSTANTS ============================= */
@@ -121,6 +128,11 @@ typedef struct
 
 /** Request of host to start new test session, written into Magic ("ITST") */
 #define IT_MAILBOX_START                    ( 0x49545354u )
+
+/** Most significant byte of \ref integrationTesting_Mailbox_t::Progress - a line feed (0x0A): probe-rs trace writes
+ *  its records (32-bit time, 32-bit value, little endian) to a line buffered output, the line feed as the last byte
+ *  of every record gets it to the host at once */
+#define IT_PROGRESS_MARK                    ( 0x0A000000u )
 
 /* ========================= EXPORTED MACROS ================================ */
 

@@ -176,6 +176,8 @@ goto INITIALIZATION
 
 :RUN_MW_CONFIG
 cls
+call :SELECT_MW_PROJECT
+if "%MW_PROJECT_ARG%"=="BACK" goto INITIALIZATION
 cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
 set "MODULE_ID="
 set /p MODULE_ID=Enter middleware ID (numerical):
@@ -184,21 +186,39 @@ if "%MODULE_ID%"=="0" goto INITIALIZATION
 cmake -DFUNCTION_ID="VERSION_LIST" -DMODULE_ID=%MODULE_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
 set "VERSION_ID=0"
 set /p VERSION_ID=Enter version ID (numerical, 0 = Latest):
-cmake -DFUNCTION_ID="MW_CONFIG" -DMODULE_ID=%MODULE_ID% -DVERSION_ID=%VERSION_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+cmake -DFUNCTION_ID="MW_CONFIG" %MW_PROJECT_ARG% -DMODULE_ID=%MODULE_ID% -DVERSION_ID=%VERSION_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
 pause
 goto INITIALIZATION
 
 
 :RUN_MW_UPDATE
 cls
+call :SELECT_MW_PROJECT
+if "%MW_PROJECT_ARG%"=="BACK" goto INITIALIZATION
 cmake -DFUNCTION_ID="MODULE_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
 set "MODULE_ID="
 set /p MODULE_ID=Enter middleware ID to update (numerical):
 if "%MODULE_ID%"=="" goto INITIALIZATION
 if "%MODULE_ID%"=="0" goto INITIALIZATION
-cmake -DFUNCTION_ID="MW_UPDATE" -DMODULE_ID=%MODULE_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+cmake -DFUNCTION_ID="MW_UPDATE" %MW_PROJECT_ARG% -DMODULE_ID=%MODULE_ID% -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
 pause
 goto INITIALIZATION
+
+
+rem Project of the middleware - asked only when the platform root folder has more projects (projects of the cores)
+:SELECT_MW_PROJECT
+set "MW_PROJECT_ARG="
+set "MW_PROJECTS="
+for /f "delims=" %%P in ('cmake "-DFUNCTION_ID=PROJECT_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake') do set "MW_PROJECTS=1"
+if not defined MW_PROJECTS exit /b
+cmake -DFUNCTION_ID="PROJECT_LIST" -P CMake/HelperTools/Mw_Handler/Mw_ModuleHandler.cmake
+set "PROJECT_ID="
+set /p PROJECT_ID=Enter project ID (numerical):
+set "MW_PROJECT_ARG=BACK"
+if "%PROJECT_ID%"=="" exit /b
+if "%PROJECT_ID%"=="0" exit /b
+set "MW_PROJECT_ARG=-DPROJECT_ID=%PROJECT_ID%"
+exit /b
 
 
 :RUN_DOCS_INIT
