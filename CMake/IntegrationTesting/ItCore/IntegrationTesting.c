@@ -31,6 +31,7 @@
 /* ============================= INCLUDES =================================== */
 #include "IntegrationTesting.h"             /* Self include                   */
 #include "IntegrationTesting_Target.h"      /* Target interface (test set)    */
+#include "IntegrationTesting_Core.h"        /* Halts by the probe (per core)  */
 #include "unity.h"                          /* Unity testing framework        */
 #include "stdatomic.h"                      /* Memory barriers                */
 #include "stddef.h"                         /* offsetof                       */
@@ -56,6 +57,8 @@ static void integrationTesting_PutDec           ( uint32_t value );
 static void integrationTesting_PutHex           ( uint32_t value );
 static void integrationTesting_Idle             ( void );
 static void integrationTesting_WaitHostAttach   ( void );
+static void integrationTesting_WaitHostDetach   ( void );
+static void integrationTesting_WaitHostNext     ( void );
 
 /* ========================= SYMBOLIC CONSTANTS ============================= */
 
@@ -80,30 +83,27 @@ static void integrationTesting_WaitHostAttach   ( void );
 /** Size of the widest ECC word of a RAM [B] (64-bit ECC word of STM32H7 AXI SRAM) - alignment of the mailbox */
 #define IT_RAM_ECC_WORD_SIZE                ( 8u )
 
-/** Comparator 0 of the Flash Patch and Breakpoint unit (FP_COMP0, ARMv7-M / ARMv8-M) - attach mark of the
- *  probe: the probe (probe-rs) halts the core, clears every hardware breakpoint and resumes the core on its attach */
-#define IT_FPB_COMP0_ADDR                   ( 0xE0002008u )
+/** Longest wait for the command of the host [loop passes] (several seconds at the reset clock, then the execution
+ *  continues - a lost command must not block the session) */
+#define IT_HOST_WAIT_LOOPS                  ( 100000000u )
 
-/** Value of FP_COMP0 marking "no attach yet" - an address with the enable bit (bit 0) cleared, never a breakpoint */
-#define IT_FPB_ATTACH_MARK                  ( 0x00000004u )
+/** Wait after the halt of the end of a probe session before the reset of the MCU [loop passes] - the probe ends its
+ *  session after the resume of the core, a reset during it fails the probe call */
+#define IT_HOST_SETTLE_LOOPS                ( 1000000u )
 
-/** Software lock access register of the FPB (FP_LAR) and its unlock key - Cortex-M7 ignores the writes of software
- *  into the FPB until it is unlocked (the debugger is not locked) */
-#define IT_FPB_LAR_ADDR                     ( 0xE0002FB0u )
-#define IT_FPB_LAR_UNLOCK_KEY               ( 0xC5ACCE55u )
+/** Longest wait for the halt of the attach of the probe trace [loop passes] (several seconds at the reset clock, then
+ *  the execution continues - a lost halt must not block the session) */
+#define IT_HALT_WAIT_LOOPS                  ( 100000000u )
 
-/** CPUID register of the core, its part number field and the part number of Cortex-M7 (the core with FP_LAR) */
-#define IT_CPUID_ADDR                       ( 0xE000ED00u )
-#define IT_CPUID_PARTNO_MASK                ( 0x0000FFF0u )
-#define IT_CPUID_PARTNO_CORTEX_M7           ( 0x0000C270u )
+/** Longest wait for the halt of the end of the probe session of the command NEXT [loop passes]: measured about 7 000
+ *  passes on Cortex-M4 at 16 MHz, the attach of the next probe trace about 700 000 (AB#2331) - a halt lost to the
+ *  probe (it clears DFSR in its session) must not make the attach of the next probe trace the end of this session */
+#define IT_HOST_END_WAIT_LOOPS              ( 500000u )
 
-/** Longest wait for the attach of the probe [loop passes] (several seconds at the reset clock, then the test case
- *  is executed anyway - a probe that does not clear the breakpoints must not block the session) */
-#define IT_ATTACH_WAIT_LOOPS                ( 100000000u )
-
-/** Passes without another attach after the last one at the start of a session or after an abort [loop passes]
- *  (about 1 s at the reset clock: the session start and the abort use more probe sessions in a row) */
-#define IT_ATTACH_QUIET_LOOPS               ( 8000000u )
+/** Wait after the halt of the attach of the probe trace before the test case [loop passes]: a probe session of the
+ *  command NEXT delayed into this boot (a failed probe call reset the MCU, AB#2331) halts the core like the attach,
+ *  its command and its end follow within a few ms - the attach of the probe trace writes no command */
+#define IT_HOST_QUIET_LOOPS                 ( 200000u )
 
 /** Count of ECC words of \ref IT_RAM_ECC_WORD_SIZE of the mailbox header (the header is 12 words - 6 ECC words) */
 #define IT_MAILBOX_HEADER_ECC_WORDS         ( offsetof( integrationTesting_Mailbox_t, Output ) / IT_RAM_ECC_WORD_SIZE )
@@ -120,10 +120,6 @@ __attribute__((section(".noinit"), aligned(IT_RAM_ECC_WORD_SIZE)))
 integrationTesting_Mailbox_t integrationTesting_Mailbox;
 
 /* ========================== LOCAL VARIABLES =============================== */
-
-/** More probe sessions in a row before the test case (session start, abort): \ref integrationTesting_WaitHostAttach
- *  waits until the attaches stop */
-static uint32_t integrationTesting_AttachSettle;
 
 /* ======================== EXPORTED FUNCTIONS ============================== */
 
@@ -142,6 +138,10 @@ void IntegrationTesting_Run( void )
     if( IT_MAILBOX_MAGIC != integrationTesting_Mailbox.Magic )
     {
         IntegrationTesting_Coverage_Clear();
+    }
+    else
+    {
+        /* Counters of the running session are kept */
     }
 #endif
 
@@ -166,6 +166,8 @@ void IntegrationTesting_Run( void )
         integrationTesting_WaitHostAttach();
 
         integrationTesting_RunCase();
+
+        integrationTesting_WaitHostDetach();
 
         integrationTesting_Reset();
     }
@@ -228,6 +230,7 @@ void IntegrationTesting_ReportFault( const char* faultName, const integrationTes
     {
         integrationTesting_Mailbox.Failures++;
         integrationTesting_NextCase();
+        integrationTesting_WaitHostDetach();
         integrationTesting_Reset();
     }
     else
@@ -336,7 +339,8 @@ static void integrationTesting_MailboxOpen( void )
     {
         integrationTesting_MailboxInit( IT_SESSION_HOST_TRACE );
 
-        integrationTesting_AttachSettle = 1u;
+        /* The session start uses more probe sessions in a row (write, reset, read) */
+        integrationTesting_Mailbox.CasePhase = IT_CASE_SETTLE;
     }
     else if( IT_MAILBOX_START == magic )
     {
@@ -391,6 +395,10 @@ static void integrationTesting_CheckInterrupted( void )
     {
         /* No test case was interrupted */
     }
+    else if( IT_CASE_SETTLE == casePhase )
+    {
+        /* Reset during the wait for the host (eg. repeated reset of the session start) - the wait continues */
+    }
     else if( IT_COMMAND_ABORT == command )
     {
         integrationTesting_PutCaseFail();
@@ -401,8 +409,15 @@ static void integrationTesting_CheckInterrupted( void )
         integrationTesting_Mailbox.Failures++;
         integrationTesting_NextCase();
 
-        /* The abort uses more probe sessions in a row (write, reset) */
-        integrationTesting_AttachSettle = 1u;
+        if( IT_SESSION_HOST_TRACE == integrationTesting_Mailbox.Session )
+        {
+            /* The abort uses more probe sessions in a row (stop of the probe trace, write, reset) */
+            integrationTesting_Mailbox.CasePhase = IT_CASE_SETTLE;
+        }
+        else
+        {
+            /* Session without probe trace */
+        }
     }
     else if( IT_CASE_RESET_EXPECTED == casePhase )
     {
@@ -673,85 +688,123 @@ static void integrationTesting_PutHex( uint32_t value )
 
 
 /**
- * \brief Waits for the attach of the probe before a test case of a session polled by probe trace (AB#2247).
+ * \brief Waits for the attach of the probe trace before a test case of a session polled by probe trace (AB#2247,
+ *        AB#2331).
  *
- * The host reads the mailbox by one probe session (probe-rs trace) per boot: the session reads the memory without
- * halting the core, but its attach halts the core for about 30 ms (breakpoints are cleared) and the reset at the
- * end of a test case ends it. A test case started before the attach is halted in the middle (a transfer loses
- * data). The firmware marks FP_COMP0 and waits until the attach clears it; at the start of the session and after
- * an abort (more probe sessions in a row) it waits until no attach follows for \ref IT_ATTACH_QUIET_LOOPS.
- * Other sessions (host without trace, debugger, local) do not wait. Cortex-M7 needs the FPB unlocked for the write
- * of the mark (FP_LAR); a core where the mark is not kept (no FPB, locked) does not wait either.
+ * The host reads the mailbox by one probe session (probe-rs trace) per test case: the session reads the memory
+ * without halting the core, but its attach halts the core for about 30 ms - a halt in the middle of a test case
+ * loses the data of a running transfer. The boot waits for the halt of the attach (detection per core,
+ * IntegrationTesting_Core.h). After the test case the host kills the probe trace and the MCU is reset by \ref IT_COMMAND_NEXT
+ * (\ref integrationTesting_WaitHostDetach). The session start and the abort use more probe sessions in a row
+ * (\ref IT_CASE_SETTLE): the boot waits for \ref IT_COMMAND_NEXT written by the host after them and resets the MCU -
+ * the next boot waits for the probe trace as every test case. Other sessions (host without trace, debugger, local)
+ * do not wait. A test case continued after its expected reset waits as every test case - the probe trace of the host
+ * may survive the reset, the host starts a new one at \ref IT_PROGRESS_WAIT_ATTACH. A halt followed by
+ * \ref IT_COMMAND_NEXT within \ref IT_HOST_QUIET_LOOPS was a delayed probe session of the command (a failed probe
+ * call reset the MCU before it): the boot is repeated without the test case.
  */
 static void integrationTesting_WaitHostAttach( void )
 {
-    volatile uint32_t * const fpComp0 = (volatile uint32_t *)IT_FPB_COMP0_ADDR;
-    uint32_t                  attachCnt = 0u;
-    uint32_t                  quietCnt  = 0u;
-
-    const uint32_t            cpuPart   = ( *(volatile const uint32_t *)IT_CPUID_ADDR & IT_CPUID_PARTNO_MASK );
-
-    if( IT_CPUID_PARTNO_CORTEX_M7 == cpuPart )
+    if( IT_SESSION_HOST_TRACE != integrationTesting_Mailbox.Session )
     {
-        /* Cortex-M7: software lock of the FPB */
-        *(volatile uint32_t *)IT_FPB_LAR_ADDR = IT_FPB_LAR_UNLOCK_KEY;
+        /* Session without probe trace */
+    }
+    else if( IT_CASE_SETTLE == integrationTesting_Mailbox.CasePhase )
+    {
+        /* The phase is kept over a reset of the probe sessions of the host */
+        integrationTesting_MailboxFlush();
+
+        integrationTesting_WaitHostNext();
+
+        integrationTesting_Mailbox.CasePhase = IT_CASE_IDLE;
+
+        integrationTesting_Reset();
     }
     else
     {
-        /* Core without the software lock of the FPB */
-    }
+        /* Halts before this boot (the probe session of the command NEXT) are cleared */
+        IntegrationTesting_Core_ClearHalted();
 
+        integrationTesting_Mailbox.Progress = ( IT_PROGRESS_MARK | IT_PROGRESS_WAIT_ATTACH | integrationTesting_Mailbox.TestIndex );
+
+        IntegrationTesting_Core_WaitHalted( IT_HALT_WAIT_LOOPS );
+
+        for( volatile uint32_t loopIdx = 0u; IT_HOST_QUIET_LOOPS > loopIdx; loopIdx++ )
+        {
+            /* A probe session of the command NEXT writes its command and ends */
+        }
+
+        if( IT_COMMAND_NEXT == integrationTesting_Mailbox.Command )
+        {
+            /* The halt was a delayed probe session of the command NEXT - the boot is repeated */
+            integrationTesting_Mailbox.Command = IT_COMMAND_NONE;
+
+            integrationTesting_Reset();
+        }
+        else
+        {
+            /* Attach of the probe trace */
+        }
+
+        integrationTesting_Mailbox.Progress = ( IT_PROGRESS_MARK | integrationTesting_Mailbox.TestIndex );
+    }
+}
+
+
+/**
+ * \brief Ends a test case of a session polled by probe trace (AB#2331): the host ends its probe trace after
+ *        \ref IT_PROGRESS_CASE_DONE and writes \ref IT_COMMAND_NEXT, the MCU is reset after it.
+ */
+static void integrationTesting_WaitHostDetach( void )
+{
     if( IT_SESSION_HOST_TRACE == integrationTesting_Mailbox.Session )
     {
-        *fpComp0 = IT_FPB_ATTACH_MARK;
+        /* The result of the test case survives a reset by the probe before the command NEXT (a failed open of the
+           probe resets the MCU) */
+        integrationTesting_MailboxFlush();
+
+        integrationTesting_Mailbox.Progress = ( IT_PROGRESS_MARK | IT_PROGRESS_CASE_DONE | integrationTesting_Mailbox.TestIndex );
+
+        integrationTesting_WaitHostNext();
     }
     else
     {
         /* Session without probe trace */
     }
+}
 
-    const uint32_t markKept = *fpComp0;
 
-    if( ( IT_SESSION_HOST_TRACE == integrationTesting_Mailbox.Session ) &&
-        ( IT_FPB_ATTACH_MARK    == markKept                           )    )
+/**
+ * \brief Waits for \ref IT_COMMAND_NEXT of the host in a session polled by probe trace (AB#2331).
+ *
+ * The host kills its probe trace (the end of a probe session halts the core, a killed probe process does not end
+ * it) and writes the command by one probe session: its attach halts the core before the command, its end after the
+ * command - the MCU is reset after that halt, no probe session of the host runs in the next boot before its probe
+ * trace.
+ */
+static void integrationTesting_WaitHostNext( void )
+{
+    for( uint32_t loopIdx = 0u; IT_HOST_WAIT_LOOPS > loopIdx; loopIdx++ )
     {
-        for( uint32_t loopIdx = 0u; IT_ATTACH_WAIT_LOOPS > loopIdx; loopIdx++ )
+        if( IT_COMMAND_NEXT == integrationTesting_Mailbox.Command )
         {
-            const uint32_t comp0 = *fpComp0;
-
-            if( IT_FPB_ATTACH_MARK != comp0 )
-            {
-                /* Attach of the probe - the mark is set again for a next attach */
-                attachCnt++;
-                quietCnt = 0u;
-                *fpComp0 = IT_FPB_ATTACH_MARK;
-            }
-            else if( 0u == attachCnt )
-            {
-                /* No attach yet */
-            }
-            else if( 0u == integrationTesting_AttachSettle )
-            {
-                /* One attach before an ordinary test case */
-                break;
-            }
-            else if( IT_ATTACH_QUIET_LOOPS > quietCnt )
-            {
-                quietCnt++;
-            }
-            else
-            {
-                /* No attach after the last one for the quiet time */
-                break;
-            }
+            break;
+        }
+        else
+        {
+            /* The host ends its probe trace */
         }
     }
-    else
+
+    IntegrationTesting_Core_ClearHalted();
+    IntegrationTesting_Core_WaitHalted( IT_HOST_END_WAIT_LOOPS );
+
+    for( volatile uint32_t loopIdx = 0u; IT_HOST_SETTLE_LOOPS > loopIdx; loopIdx++ )
     {
-        /* Session without probe trace, or the mark is not kept by FP_COMP0 */
+        /* The probe ends its session */
     }
 
-    integrationTesting_AttachSettle = 0u;
+    integrationTesting_Mailbox.Command = IT_COMMAND_NONE;
 }
 
 

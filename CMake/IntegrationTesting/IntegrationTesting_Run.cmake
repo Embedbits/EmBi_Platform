@@ -90,7 +90,9 @@ set(IT_MAILBOX_START                    "0x49545354")
 set(IT_STATE_FINISHED                   "444F4E45")
 set(IT_SESSION_LOCAL                    "4C4F434C")
 set(IT_COMMAND_ABORT                    "0x41425254")
+set(IT_COMMAND_NEXT                     "0x4E455854")
 set(IT_SESSION_HOST_VALUE               "0x484F5354")
+set(IT_SESSION_HOST_TRACE_VALUE         "0x48545243")
 set(IT_STATE_START_VALUE                "0x0")
 
 # The host writes a mailbox word together with the other half of its 64-bit ECC word (Magic + State, Session +
@@ -102,16 +104,32 @@ set(IT_POLL_PERIOD                      "0.5")
 
 # Polling of the mailbox by probe trace (AB#2247): every probe-rs call (read, write, reset) halts the core on its
 # attach and on its end (breakpoints are cleared) for about 30 ms - a halt during a test case loses data of a
-# running transfer. "probe-rs trace" keeps one probe session and reads the TestIndex word without halting the
-# core; the reset at the end of a test case ends it, the host starts it again and the firmware waits for that
-# attach before the test case (IntegrationTesting.c, integrationTesting_WaitHostAttach). Environment variable
-# INTEGRATION_TEST_POLL=read selects the former polling by probe-rs read.
+# running transfer. "probe-rs trace" keeps one probe session and reads the Progress word without halting the
+# core. One session per test case (AB#2331): the firmware waits for the halt of its attach before the test case, after
+# the test case it marks Progress with the flag "case done" - the host kills the session at that flag (an ended
+# session halts the core, a killed one does not) and writes the command NEXT, the firmware resets after the end of
+# that probe session and the host starts the next probe trace. After the probe sessions of the session start and of
+# an abort the host writes the command NEXT too (IntegrationTesting.c, integrationTesting_WaitHostNext). Environment
+# variable INTEGRATION_TEST_POLL=read selects the former polling by probe-rs read.
 set(IT_STATE_START_TRACE_VALUE          "0x54524345")
 set(IT_TRACE_POLL_PERIOD                "0.1")
 set(IT_TRACE_RECORD_SIZE                8)
 set(IT_TRACE_STOP_POLLS                 30)
 set(IT_TRACE_PROGRESS_MARK              10)
+set(IT_TRACE_INDEX_MASK                 0x3FFFFF)
+set(IT_TRACE_CASE_DONE_SHIFT            23)
+set(IT_TRACE_WAIT_ATTACH_SHIFT          22)
+set(IT_TRACE_ATTACH_TIMEOUT             2)
 set(IT_TRACE_FIRST_TIMEOUT              5)
+
+# Pause before the start of a probe trace [s]: the firmware resets after the end of the probe session of the command
+# NEXT (at most IT_HOST_END_WAIT_LOOPS of IntegrationTesting.c) before the attach of the next probe trace (AB#2331)
+set(IT_TRACE_START_DELAY                "0.3")
+
+# Attempts of a probe-rs command whose probe did not open and the pause before the next one [s]: right after the kill
+# of probe trace a STLINK-V3 does not open now and then (USB bulk read timeout, PID 3754: 3 of 60), it opens 0.5 s later
+set(IT_PROBE_OPEN_ATTEMPTS              3)
+set(IT_PROBE_OPEN_RETRY_PERIOD          "0.5")
 
 # Longest wait for a probe used by another client [s] (host configuration without IT_LOCK_TIMEOUT)
 set(IT_DEFAULT_LOCK_TIMEOUT             600)
@@ -143,14 +161,25 @@ set(IT_COVERAGE_CHUNK_SIZE              4096)
 #------------------------------------------------------------------------------#
 function(itRun_ProbeRs RESULT_VAR OUTPUT_VAR SUBCOMMAND)
 
-    execute_process(
-        COMMAND "${IT_PROBE_RS}" ${SUBCOMMAND}
-                --chip "${IT_CHIP}" --probe "${IT_PROBE_SELECTOR}" --non-interactive
-                ${ARGN}
-        RESULT_VARIABLE PROBE_RS_RESULT
-        OUTPUT_VARIABLE PROBE_RS_OUTPUT
-        ERROR_VARIABLE  PROBE_RS_OUTPUT
-    )
+    # A probe that did not open did nothing - the command is repeated
+    foreach(ATTEMPT RANGE 1 ${IT_PROBE_OPEN_ATTEMPTS})
+        if(ATTEMPT GREATER 1)
+            execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep ${IT_PROBE_OPEN_RETRY_PERIOD})
+        endif()
+
+        execute_process(
+            COMMAND "${IT_PROBE_RS}" ${SUBCOMMAND}
+                    --chip "${IT_CHIP}" --probe "${IT_PROBE_SELECTOR}" --non-interactive
+                    ${ARGN}
+            RESULT_VARIABLE PROBE_RS_RESULT
+            OUTPUT_VARIABLE PROBE_RS_OUTPUT
+            ERROR_VARIABLE  PROBE_RS_OUTPUT
+        )
+
+        if(NOT PROBE_RS_OUTPUT MATCHES "Failed to open probe")
+            break()
+        endif()
+    endforeach()
 
     set(${RESULT_VAR} "${PROBE_RS_RESULT}" PARENT_SCOPE)
     set(${OUTPUT_VAR} "${PROBE_RS_OUTPUT}" PARENT_SCOPE)
@@ -296,8 +325,9 @@ endfunction(itRun_TraceAlive)
 
 
 #------------------------------------------------------------------------------#
-# Ends the probe-rs trace process (interrupt, it closes its probe session; killed
-# when it does not end) - the probe is free for the next probe-rs call.
+# Ends the probe-rs trace process by kill - probe-rs trace does not end on an
+# interrupt, the killed process does not end its probe session (no halt of the
+# core, AB#2331). The probe is free for the next probe-rs call.
 #
 # TRACE_PID [in]: Process id (itRun_TraceStart, "" - nothing to end)
 #------------------------------------------------------------------------------#
@@ -312,7 +342,7 @@ function(itRun_TraceStop TRACE_PID)
                 ERROR_QUIET
             )
         else()
-            execute_process(COMMAND kill -INT ${TRACE_PID} OUTPUT_QUIET ERROR_QUIET)
+            execute_process(COMMAND kill -KILL ${TRACE_PID} OUTPUT_QUIET ERROR_QUIET)
         endif()
 
         foreach(STOP_POLL RANGE ${IT_TRACE_STOP_POLLS})
@@ -324,10 +354,6 @@ function(itRun_TraceStop TRACE_PID)
 
             execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep ${IT_TRACE_POLL_PERIOD})
         endforeach()
-
-        if(TRACE_ALIVE AND NOT CMAKE_HOST_WIN32)
-            execute_process(COMMAND kill -KILL ${TRACE_PID} OUTPUT_QUIET ERROR_QUIET)
-        endif()
     endif()
 
 endfunction(itRun_TraceStop)
@@ -663,7 +689,12 @@ else()
 endif()
 
 if(DOWNLOAD_RESULT EQUAL 0)
-    itRun_ProbeRs(DOWNLOAD_RESULT DOWNLOAD_OUTPUT write b32 ${MAILBOX_ADDRESS_HEX} ${IT_MAILBOX_START} ${IT_START_STATE})
+    # Length (initialized by the firmware) after State: on a RAM with ECC (STM32H7 AXI SRAM) the last write before
+    # the reset is lost
+    itRun_ProbeRs(DOWNLOAD_RESULT
+                  DOWNLOAD_OUTPUT
+                  write
+                  b32 ${MAILBOX_ADDRESS_HEX} ${IT_MAILBOX_START} ${IT_START_STATE} 0)
 endif()
 
 if(DOWNLOAD_RESULT EQUAL 0)
@@ -687,8 +718,8 @@ set(CASE_PROGRESS   "")
 set(CASE_START_TIME ${START_TIME})
 
 if(IT_POLL_TRACE)
-    # The header is read once (count of the test cases, valid session) - the firmware waits for the probe sessions
-    # of the session start to end before the first test case
+    # The header is read once (count of the test cases, valid session) - the firmware waits for the command NEXT
+    # after the probe sessions of the session start (written below)
     itRun_ReadMemory(HEADER_HEX ${MAILBOX_ADDRESS} ${IT_MAILBOX_HEADER_SIZE})
     string(LENGTH "${HEADER_HEX}" HEADER_HEX_LENGTH)
     math(EXPR HEADER_HEX_EXPECTED "${IT_MAILBOX_HEADER_SIZE} * 2")
@@ -714,6 +745,14 @@ if(IT_POLL_TRACE)
     # Progress word of the firmware after the output buffer (IntegrationTesting.h, Progress)
     if(CASE_COUNT GREATER_EQUAL 0)
         math(EXPR TEST_INDEX_ADDRESS "${MAILBOX_ADDRESS} + ${IT_MAILBOX_HEADER_SIZE} + 0x${SIZE}" OUTPUT_FORMAT HEXADECIMAL)
+
+        # The last probe session before the probe trace - the firmware resets after its end
+        itRun_ProbeRs(NEXT_RESULT NEXT_OUTPUT write b32 ${SESSION_ADDRESS} ${IT_SESSION_HOST_TRACE_VALUE} ${IT_COMMAND_NEXT})
+
+        if(NOT NEXT_RESULT EQUAL 0)
+            message("${NEXT_OUTPUT}")
+            message(WARNING "Command NEXT of the session start failed - the firmware continues after its timeout.")
+        endif()
     endif()
 
     set(TRACE_FIRST_VALUE FALSE)
@@ -722,18 +761,22 @@ if(IT_POLL_TRACE)
     set(TRACE_PID       "")
     set(TRACE_CNT       0)
     set(CASE_SEEN       -1)
+    set(CASE_DONE_SEEN  -1)
+    set(ATTACH_WAIT_START "")
 
     while(CASE_COUNT GREATER_EQUAL 0 AND NOT TESTS_FINISHED)
 
         itRun_TraceAlive(TRACE_ALIVE "${TRACE_PID}")
 
         if(NOT TRACE_ALIVE)
-            # A reset of the MCU (end of a test case or of its stage) ended the session of probe trace - the
-            # firmware waits for the attach of the next one
+            # The host killed the probe trace after a test case (or a reset of the MCU ended it, a stage of a test
+            # case) - the firmware waits for the attach of the next one
             math(EXPR TRACE_CNT "${TRACE_CNT} + 1")
             set(TRACE_FILE "${TRACE_FILE_BASE}_${TRACE_CNT}.bin")
+            execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep ${IT_TRACE_START_DELAY})
             itRun_TraceStart(TRACE_PID "${TRACE_FILE}" ${TEST_INDEX_ADDRESS})
             string(TIMESTAMP CASE_START_TIME "%s")
+            set(ATTACH_WAIT_START "")
         endif()
 
         execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep ${IT_TRACE_POLL_PERIOD})
@@ -742,14 +785,22 @@ if(IT_POLL_TRACE)
         string(TIMESTAMP ACTUAL_TIME "%s")
 
         set(CASE_INDEX "")
+        set(CASE_DONE  0)
+        set(CASE_WAIT  0)
 
         if(NOT "${TRACE_VALUE}" STREQUAL "")
             math(EXPR TRACE_MARK "${TRACE_VALUE} >> 24")
 
             if(TRACE_MARK EQUAL IT_TRACE_PROGRESS_MARK)
-                math(EXPR CASE_INDEX "${TRACE_VALUE} & 0xFFFFFF")
+                math(EXPR CASE_INDEX "${TRACE_VALUE} & ${IT_TRACE_INDEX_MASK}")
+                math(EXPR CASE_DONE  "( ${TRACE_VALUE} >> ${IT_TRACE_CASE_DONE_SHIFT} ) & 1")
+                math(EXPR CASE_WAIT  "( ${TRACE_VALUE} >> ${IT_TRACE_WAIT_ATTACH_SHIFT} ) & 1")
                 set(TRACE_FIRST_VALUE TRUE)
             endif()
+        endif()
+
+        if(NOT CASE_WAIT EQUAL 1)
+            set(ATTACH_WAIT_START "")
         endif()
 
         math(EXPR TRACE_WAIT "${ACTUAL_TIME} - ${START_TIME}")
@@ -760,6 +811,33 @@ if(IT_POLL_TRACE)
             break()
         elseif("${CASE_INDEX}" STREQUAL "")
             # No record yet (probe session starts)
+        elseif(CASE_WAIT EQUAL 1)
+            # The boot waits for the attach of a probe trace - a probe trace surviving the reset of the MCU (expected
+            # reset of a test case) does not attach again, a new one is started
+            if("${ATTACH_WAIT_START}" STREQUAL "")
+                set(ATTACH_WAIT_START ${ACTUAL_TIME})
+            else()
+                math(EXPR ATTACH_WAIT "${ACTUAL_TIME} - ${ATTACH_WAIT_START}")
+
+                if(ATTACH_WAIT GREATER_EQUAL IT_TRACE_ATTACH_TIMEOUT)
+                    itRun_TraceStop("${TRACE_PID}")
+                    set(TRACE_PID         "")
+                    set(ATTACH_WAIT_START "")
+                endif()
+            endif()
+        elseif(CASE_DONE EQUAL 1 AND NOT CASE_INDEX EQUAL CASE_DONE_SEEN)
+            # Test case finished (also the last one) - the firmware resets the MCU after the command NEXT, the next
+            # boot waits for the attach of the next probe trace
+            set(CASE_DONE_SEEN ${CASE_INDEX})
+            itRun_TraceStop("${TRACE_PID}")
+            set(TRACE_PID "")
+
+            itRun_ProbeRs(NEXT_RESULT NEXT_OUTPUT write b32 ${SESSION_ADDRESS} ${IT_SESSION_HOST_TRACE_VALUE} ${IT_COMMAND_NEXT})
+
+            if(NOT NEXT_RESULT EQUAL 0)
+                message("${NEXT_OUTPUT}")
+                message(WARNING "Command NEXT failed - the firmware continues after its timeout.")
+            endif()
         elseif(CASE_INDEX GREATER_EQUAL CASE_COUNT)
             set(TESTS_FINISHED TRUE)
         elseif(NOT CASE_INDEX EQUAL CASE_SEEN)
@@ -776,10 +854,16 @@ if(IT_POLL_TRACE)
                 itRun_TraceStop("${TRACE_PID}")
                 set(TRACE_PID "")
 
-                itRun_ProbeRs(ABORT_RESULT ABORT_OUTPUT write b32 ${SESSION_ADDRESS} ${IT_SESSION_HOST_VALUE} ${IT_COMMAND_ABORT})
+                # The session stays polled by probe trace, the command NEXT after the reset ends the probe sessions
+                # of the abort
+                itRun_ProbeRs(ABORT_RESULT ABORT_OUTPUT write b32 ${SESSION_ADDRESS} ${IT_SESSION_HOST_TRACE_VALUE} ${IT_COMMAND_ABORT})
 
                 if(ABORT_RESULT EQUAL 0)
                     itRun_ProbeRsReset(ABORT_RESULT ABORT_OUTPUT)
+                endif()
+
+                if(ABORT_RESULT EQUAL 0)
+                    itRun_ProbeRs(ABORT_RESULT ABORT_OUTPUT write b32 ${SESSION_ADDRESS} ${IT_SESSION_HOST_TRACE_VALUE} ${IT_COMMAND_NEXT})
                 endif()
 
                 if(NOT ABORT_RESULT EQUAL 0)
@@ -787,7 +871,8 @@ if(IT_POLL_TRACE)
                     message(WARNING "Abort of the blocked test case failed.")
                 endif()
 
-                set(CASE_SEEN -1)
+                set(CASE_SEEN      -1)
+                set(CASE_DONE_SEEN -1)
             endif()
         endif()
 

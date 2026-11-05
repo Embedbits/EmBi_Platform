@@ -63,7 +63,10 @@
 #   INTEGRATION_TEST_TIMEOUT      - Default timeout of test firmware execution [s]
 #   INTEGRATION_TEST_CASE_TIMEOUT - Default timeout of one test case [s], blocked test
 #                                   case is aborted by host (reset of MCU)
-#   INTEGRATION_TEST_HOST         - IT agent of the board: name of ItHosts.json of the project or
+#   INTEGRATION_TEST_CASE_HOST_TIME - Time of the host per test case [s] (default 3), added to the
+#                                   timeout of the firmware execution: one probe session per test
+#                                   case (AB#2331), a probe that does not open is opened again
+#   INTEGRATION_TEST_HOST        - IT agent of the board: name of ItHosts.json of the project or
 #                                   <user>@<host>[:<SSH port>] (empty = this machine). The firmware
 #                                   is copied to the agent and executed there (IntegrationTesting_Run.cmake,
 #                                   IntegrationTesting_Remote.cmake), the output is evaluated here.
@@ -168,6 +171,9 @@ set(INTEGRATION_TEST_TIMEOUT            "60"
 
 set(INTEGRATION_TEST_CASE_TIMEOUT       "10"
     CACHE STRING                        "Default timeout of one integration test case [s]")
+
+set(INTEGRATION_TEST_CASE_HOST_TIME     "3"
+    CACHE STRING                        "Time of the host per integration test case, added to the timeout [s]")
 
 set(INTEGRATION_TEST_LOCK_TIMEOUT       "600"
     CACHE STRING                        "Longest wait for a probe used by another client (debugging, pipeline job) [s]")
@@ -484,7 +490,13 @@ target_compile_definitions(unity
 
 # Execution of test cases and result mailbox (target independent). Target
 # interface (IntegrationTesting_Target.h) is implemented by every test set.
-add_library(ItCore STATIC ${INTEGRATION_TESTING_DIR}/ItCore/IntegrationTesting.c)
+# Halts of the core by the probe: one handler per core, the compiler selects
+# it by the architecture (IntegrationTesting_Core.h).
+add_library(ItCore STATIC
+    ${INTEGRATION_TESTING_DIR}/ItCore/IntegrationTesting.c
+    ${INTEGRATION_TESTING_DIR}/ItCore/IntegrationTesting_CoreArmv7m.c
+    ${INTEGRATION_TESTING_DIR}/ItCore/IntegrationTesting_CoreArmv8m.c
+)
 
 target_link_libraries(ItCore
     PUBLIC
@@ -914,19 +926,22 @@ function(IntegrationTesting_Add_Test)
 
     endif()
 
-    # Execution of the firmware on target (fixture of all test cases)
+    # Execution of the firmware on target (fixture of all test cases) - the time of the host per test case (probe
+    # session per test case, AB#2331) is added to TIMEOUT of the test
+    math(EXPR RUN_IT_TIMEOUT "${IT_TIMEOUT} + ${TEST_CASES_CNT} * ${INTEGRATION_TEST_CASE_HOST_TIME}")
+
     add_test(NAME "${IT_NAME}.Run"
              COMMAND ${CMAKE_COMMAND}
                      "-DIT_ELF=$<TARGET_FILE:${TEST_TARGET}>"
                      "-DIT_LOG=${OUTPUT_LOG}"
                      "-DIT_NM=${CMAKE_NM}"
                      "-DIT_CONFIG=${INTEGRATION_TEST_HOST_CONFIG}"
-                     "-DIT_TIMEOUT=${IT_TIMEOUT}"
+                     "-DIT_TIMEOUT=${RUN_IT_TIMEOUT}"
                      "-DIT_CASE_TIMEOUT=${IT_CASE_TIMEOUT}"
                      ${COVERAGE_DUMP_ARGUMENT}
                      -P "${INTEGRATION_TESTING_DIR}/IntegrationTesting_Run.cmake")
 
-    math(EXPR RUN_TIMEOUT "${IT_TIMEOUT} + 60")
+    math(EXPR RUN_TIMEOUT "${RUN_IT_TIMEOUT} + 60")
 
     set_tests_properties("${IT_NAME}.Run" PROPERTIES
         FIXTURES_SETUP  "${TEST_TARGET}"

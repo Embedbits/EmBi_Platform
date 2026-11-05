@@ -49,7 +49,8 @@ typedef enum
 {
     IT_SESSION_HOST       = 0x484F5354u,    /**< Started by host (\ref IT_MAILBOX_START written before reset) ("HOST") */
     IT_SESSION_HOST_TRACE = 0x48545243u,    /**< Started by host polling by probe trace (\ref IT_STATE_TRACE): every
-                                                 test case waits for the attach of the probe ("HTRC")              */
+                                                 test case waits for the attach of the probe trace and for
+                                                 \ref IT_COMMAND_NEXT after the test case ("HTRC")                 */
     IT_SESSION_LOCAL      = 0x4C4F434Cu     /**< Started without host - power-on, debugger, lost mailbox ("LOCL")      */
 }   integrationTesting_Session_t;
 
@@ -58,7 +59,12 @@ typedef enum
 typedef enum
 {
     IT_COMMAND_NONE  = 0x00000000u,         /**< No command                                                  */
-    IT_COMMAND_ABORT = 0x41425254u          /**< Running test case is blocked, host aborted it ("ABRT")      */
+    IT_COMMAND_ABORT = 0x41425254u,         /**< Running test case is blocked, host aborted it ("ABRT")      */
+    IT_COMMAND_NEXT  = 0x4E455854u          /**< Session polled by probe trace: the host ended its probe trace
+                                                 after the test case (\ref IT_PROGRESS_CASE_DONE) or after
+                                                 the probe sessions of the session start or of the abort
+                                                 (\ref IT_CASE_SETTLE), the MCU is reset for the next probe
+                                                 trace ("NEXT")                                              */
 }   integrationTesting_Command_t;
 
 
@@ -67,7 +73,10 @@ typedef enum
 {
     IT_CASE_IDLE           = 0x00000000u,   /**< No test case is executed                                    */
     IT_CASE_RUNNING        = 0x43415345u,   /**< Test case is executed, reset is not expected ("CASE")       */
-    IT_CASE_RESET_EXPECTED = 0x52535445u    /**< Test case is executed, it expects reset of MCU ("RSTE")     */
+    IT_CASE_RESET_EXPECTED = 0x52535445u,   /**< Test case is executed, it expects reset of MCU ("RSTE")     */
+    IT_CASE_SETTLE         = 0x53544C45u    /**< No test case - the boot waits for \ref IT_COMMAND_NEXT of a
+                                                 session polled by probe trace (session start, abort) and
+                                                 resets the MCU ("STLE")                                     */
 }   integrationTesting_CasePhase_t;
 
 
@@ -116,7 +125,8 @@ typedef struct
     volatile uint32_t                       Failures;   /**< Count of failed test cases                                     */
     volatile uint32_t                       Ignored;    /**< Count of ignored test cases                                    */
     volatile char                           Output[ IT_OUTPUT_SIZE ]; /**< Unity output (text)                                */
-    volatile uint32_t                       Progress;   /**< \ref IT_PROGRESS_MARK | TestIndex, written at every boot - the
+    volatile uint32_t                       Progress;   /**< \ref IT_PROGRESS_MARK | TestIndex, written at every boot, with
+                                                             \ref IT_PROGRESS_CASE_DONE after the test case - the
                                                              word of the probe trace of the host (after Output, the
                                                              header layout stays)                                    */
 }   integrationTesting_Mailbox_t;
@@ -133,6 +143,15 @@ typedef struct
  *  its records (32-bit time, 32-bit value, little endian) to a line buffered output, the line feed as the last byte
  *  of every record gets it to the host at once */
 #define IT_PROGRESS_MARK                    ( 0x0A000000u )
+
+/** Flag of \ref integrationTesting_Mailbox_t::Progress - the test case is finished (TestIndex is the next one): the
+ *  host ends its probe trace and writes \ref IT_COMMAND_NEXT, the firmware resets the MCU (AB#2331) */
+#define IT_PROGRESS_CASE_DONE               ( 0x00800000u )
+
+/** Flag of \ref integrationTesting_Mailbox_t::Progress - the boot waits for the attach of the probe trace: a probe
+ *  trace surviving the reset of the MCU (expected reset of a test case) does not attach again, the host starts a new
+ *  one (AB#2331) */
+#define IT_PROGRESS_WAIT_ATTACH             ( 0x00400000u )
 
 /* ========================= EXPORTED MACROS ================================ */
 

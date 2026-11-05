@@ -81,24 +81,41 @@ host: probe-rs list                            -> connected probes (candidates I
 
 MCU:  startup code -> entry point of the test set (eg. BspMain) -> IntegrationTesting_Run()
       ItTarget_Init (test set) -> mailbox open -> evaluation of the test case interrupted by reset
-        -> Progress = 0x0A000000 | TestIndex -> wait for the attach of the probe (session HTRC)
-        -> test case [TestIndex] (Unity) -> TestIndex++ -> ItTarget_SystemReset (test set)
+        -> Progress = 0x0A000000 | TestIndex -> wait for the attach of the probe trace (session HTRC)
+        -> test case [TestIndex] (Unity) -> TestIndex++
+        -> Progress |= 0x00800000 (case done) -> wait for Command NEXT and the end of its probe session
+           (session HTRC) -> ItTarget_SystemReset (test set)
         -> ... -> all test cases done -> summary -> State DONE -> busy loop (no WFI)
+      session start / abort (session HTRC, phase STLE): wait for Command NEXT and the end of its probe
+        session -> ItTarget_SystemReset, no test case
 
-host: write b32 <mailbox> ITST TRCE (start of a session polled by probe trace), reset, read header once
-      probe-rs trace <Progress> in the background - one probe session per boot, it ends with the reset
-        of the test case and is started again; no progress for CASE_TIMEOUT -> abort
+host: write b32 <mailbox> ITST TRCE 0 (start of a session polled by probe trace, Length 0 written after State:
+        on a RAM with ECC the last write before a reset is lost), reset, read header once,
+        write b32 <Session> HTRC NEXT
+      probe-rs trace <Progress> in the background - one probe session per test case, the host kills it at
+        "case done", writes b32 <Session> HTRC NEXT and starts the next one; no progress for CASE_TIMEOUT -> abort
       until TestIndex == TestCount, then read header until DONE, read Output[Length] -> IT_<Name>.log
-      abort: write b32 <Command> ABRT, reset
+      abort: write b32 <Session> HTRC ABRT, reset, write b32 <Session> HTRC NEXT
 ```
 
 Every probe-rs call (read, write, reset) halts the core on its attach and on its end (probe-rs clears the
 hardware breakpoints, about 30 ms each). A halt in the middle of a test case loses the data of a running transfer
 (a UART byte by overrun, for example), so the host does not poll the mailbox by probe-rs read during the test
 cases (AB#2247): `probe-rs trace` keeps one probe session and reads the `Progress` word (after `Output`) without
-halting the core. Its attach still halts the core once - the firmware of a session started with `TRCE` (session
-`HTRC`) marks `FP_COMP0` before every test case and waits until the attach of the probe clears it; at the start of
-the session and after an abort (several probe sessions in a row) it waits until no attach follows for about 1 s.
+halting the core. Its attach still halts the core - the firmware of a session started with `TRCE` (session `HTRC`)
+clears the sticky halt flag and starts a test case after the halt of the attach of the probe trace (handler
+per core, `ItCore/IntegrationTesting_Core.h`: Cortex-M4 / M7 by `DFSR.HALTED`; Cortex-M33 by `DHCSR.S_RESTART_ST`,
+its `DFSR.HALTED` stays cleared). After
+the test case it sets the flag "case done" in `Progress`: the host kills the probe trace (the end of a probe session
+halts the core, a killed probe process does not end it; probe-rs trace does not end on an interrupt) and writes the
+command `NEXT`, the firmware resets the MCU after the halt of the end of that probe session (AB#2331: no probe
+session ends during the next test case - the probe trace survives the reset on Cortex-M33 / M4, Cortex-M7 resets
+end it late). The mailbox is written to the RAM completely before the flag "case done": a failed open of the probe
+resets the MCU (pin reset), on a RAM with ECC (STM32H7 AXI SRAM) the last write before a reset is lost otherwise.
+The session start and an abort use several probe sessions in a row: the host writes `NEXT` after them,
+the firmware resets the MCU without a test case (phase `STLE`). Every wait of the firmware ends after several
+seconds at most. A test case continued after its expected reset waits for a halt as every test case - the probe
+trace may survive that reset (the wait ends by its timeout).
 The line feed in the most significant byte of `Progress` makes probe-rs write every record to its line buffered
 output at once. Firmware without the `Progress` word is polled by probe-rs read (after 5 s without a record);
 environment variable `INTEGRATION_TEST_POLL=read` selects that polling always.
@@ -521,6 +538,7 @@ Parameters:
 | `INTEGRATION_TEST_OUTPUT_SIZE` | `4096` | Unity output buffer [B] (RAM of the smallest MCU - H503 has 32 KB). |
 | `INTEGRATION_TEST_TIMEOUT` | `60` | Default timeout of all test cases of the firmware [s], `TIMEOUT` of the test overrides it. |
 | `INTEGRATION_TEST_CASE_TIMEOUT` | `10` | Default timeout of one test case [s], `CASE_TIMEOUT` of the test overrides it. |
+| `INTEGRATION_TEST_CASE_HOST_TIME` | `3` | Time of the host per test case [s], added to the timeout of all test cases (`TIMEOUT` + count of the test cases × this time): one probe session per test case, about 1.5 s, a probe that does not open is opened again (about 4 s more). |
 | `INTEGRATION_TEST_LOCK_TIMEOUT` | `600` | Longest wait for a probe used by another client [s] ([Probe lock](#probe-lock)); environment variable of the same name at test time overrides it. |
 | `INTEGRATION_TEST_HOST` | - | IT agent of the board: name of `ItHosts.json` or `<user>@<host>[:<SSH port>]`, empty = this machine ([Boards of IT agents](#boards-of-it-agents)); environment variable of the same name (SSH target) at test time overrides it. |
 | `INTEGRATION_TEST_OPTIMIZATION` | `-O0` | Optimization option of the test firmware. Devices with a small flash need a smaller firmware, e.g. `-Os` for STM32H7R / STM32H7S (64 KB flash: Adc test set 76.7 KB at `-O0`, 41.3 KB at `-Os`). Set it in the hidden preset `project` of `CMakePresets.json` or by `-DINTEGRATION_TEST_OPTIMIZATION=-Os`. |
@@ -542,7 +560,7 @@ The framework needs from the project (linker script, startup code, MCU configura
 | Output section **`.noinit`** in the linker script (`NOLOAD`, in RAM, not zeroed or copied by the startup code) | Result mailbox `integrationTesting_Mailbox` is placed by `__attribute__((section(".noinit")))` - it keeps the session state and the output over system resets between test cases. | Without the section the linker places the mailbox into another section or the startup code clears it: `<Name>.Run` fails with "mailbox is not kept over system reset" (session `LOCL`). |
 | RAM of `.noinit` is **not erased by system reset** | Hardware erase of RAM on reset (eg. option bytes / reset configuration of the MCU) clears the mailbox the same way. | Same as above. |
 | RAM readable by the debug probe **while the core runs** | Host polls the mailbox without stopping the test (probe-rs trace). | Timeout of `<Name>.Run`. |
-| Flash Patch and Breakpoint unit with `FP_COMP0` at `0xE0002008` (ARMv7-M / ARMv8-M) | Attach mark of the probe before a test case (session `HTRC`). | Without it the test case starts at once (the attach of the probe may halt it). |
+| Halt flag of the core readable by the firmware: `DFSR.HALTED` (Cortex-M4 / M7), `DHCSR.S_RESTART_ST` (Cortex-M33) | Halt of the attach of the probe before a test case (session `HTRC`, `ItCore/IntegrationTesting_Core.h`). | Another core has no handler: link error (`IntegrationTesting_Core_WaitHalted`). |
 | GCC compatible toolchain | `__attribute__((section))`, `-Wl,-Map`, `objcopy -O ihex`, `size`. | Build error. |
 
 Example (GNU ld, `.noinit` after `.bss`):
